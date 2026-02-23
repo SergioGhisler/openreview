@@ -839,8 +839,7 @@ async function createPrForActiveProject() {
   const project = getActiveProject();
   if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
 
-  const defaultTitle = project.branch ? `[${project.branch}] ` : "";
-  const title = window.prompt("PR title:", defaultTitle);
+  const title = window.prompt("PR title:");
   if (title === null) return;
 
   const cleanTitle = title.trim();
