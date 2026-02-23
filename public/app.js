@@ -29,6 +29,8 @@ const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
+const prListEl = document.getElementById("pr-list");
+const refreshPrsBtn = document.getElementById("refresh-prs-btn");
 
 const suggestionState = {
   visible: false,
@@ -54,6 +56,12 @@ const worktreeState = {
   loading: false,
   switching: false,
   items: []
+};
+
+const prState = {
+  loading: false,
+  items: [],
+  error: null
 };
 
 const swipeConfig = {
@@ -194,6 +202,142 @@ function escapeHtml(value) {
 
 function setDiffMessage(msg) {
   diffViewerEl.innerHTML = `<span class="diff-line diff-context">${escapeHtml(msg)}</span>`;
+}
+
+function formatRelativeDate(isoValue) {
+  if (!isoValue) return "";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "updated now";
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `updated ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `updated ${days}d ago`;
+
+  return `updated ${date.toLocaleDateString()}`;
+}
+
+function toGitHubAppUrl(webUrl) {
+  try {
+    const parsed = new URL(webUrl);
+    if (!parsed.hostname.endsWith("github.com")) return null;
+    return `github://${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function openPrInBrowser(url) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function openPrInGitHubApp(url) {
+  const appUrl = toGitHubAppUrl(url);
+  if (!appUrl) {
+    openPrInBrowser(url);
+    return;
+  }
+
+  let fallbackOpened = false;
+  const fallbackId = setTimeout(() => {
+    fallbackOpened = true;
+    openPrInBrowser(url);
+  }, 800);
+
+  window.location.href = appUrl;
+
+  setTimeout(() => {
+    if (!fallbackOpened) {
+      clearTimeout(fallbackId);
+    }
+  }, 1200);
+}
+
+function renderPrList() {
+  const project = getActiveProject();
+  const isGitProject = Boolean(project && project.isGit);
+
+  refreshPrsBtn.disabled = !isGitProject || prState.loading;
+
+  if (!isGitProject) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "Select a git project to load pull requests.";
+    return;
+  }
+
+  if (prState.loading) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "Loading open pull requests...";
+    return;
+  }
+
+  if (prState.error) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = prState.error;
+    return;
+  }
+
+  if (!prState.items.length) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "No open pull requests for this project.";
+    return;
+  }
+
+  prListEl.className = "pr-list";
+  prListEl.innerHTML = prState.items
+    .map((item, index) => {
+      const author = item.author && item.author.login ? `@${item.author.login}` : "unknown";
+      const updated = formatRelativeDate(item.updatedAt);
+      const branchMeta = `${item.headRefName || "?"} -> ${item.baseRefName || "?"}`;
+      return `
+        <div class="pr-item">
+          <div class="pr-item-top">
+            <span class="pr-item-title">${escapeHtml(item.title || "Untitled")}</span>
+            <span class="pr-item-number">#${escapeHtml(item.number || "")}</span>
+          </div>
+          <div class="pr-item-meta">${escapeHtml(branchMeta)}</div>
+          <div class="pr-item-meta">${escapeHtml(author)} ${escapeHtml(updated)}</div>
+          <div class="pr-item-actions">
+            <button type="button" class="pr-open-btn" data-pr-index="${index}" data-pr-action="browser">Open tab</button>
+            <button type="button" class="pr-app-btn" data-pr-index="${index}" data-pr-action="app">GitHub app</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function loadOpenPrsForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    prState.items = [];
+    prState.error = null;
+    renderPrList();
+    return;
+  }
+
+  prState.loading = true;
+  prState.error = null;
+  renderPrList();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/prs?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load pull requests.");
+
+    prState.items = payload.prs || [];
+  } catch (error) {
+    prState.items = [];
+    prState.error = error.message;
+  } finally {
+    prState.loading = false;
+    renderPrList();
+  }
 }
 
 function closeWorktreeMenu() {
@@ -522,6 +666,9 @@ function renderProjectDetails() {
     filesCountEl.textContent = "0";
     diffFileNameEl.textContent = "Select a file";
     document.body.classList.remove("viewing-diff");
+    prState.items = [];
+    prState.error = null;
+    renderPrList();
     return;
   }
 
@@ -865,11 +1012,12 @@ async function createPrForActiveProject() {
     if (!response.ok) throw new Error(payload.error || "Could not create pull request.");
 
     if (payload.url) {
-      window.open(payload.url, "_blank", "noopener,noreferrer");
+      openPrInBrowser(payload.url);
       showToast("PR created and opened in browser.");
     } else {
       showToast("PR created.");
     }
+    void loadOpenPrsForActiveProject();
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -887,6 +1035,7 @@ function selectProject(projectPath) {
   document.body.classList.remove("viewing-diff");
   renderProjects();
   renderProjectDetails();
+  void loadOpenPrsForActiveProject();
 }
 
 async function openProject(projectPath) {
@@ -987,6 +1136,7 @@ projectSuggestionsEl.addEventListener("click", async (event) => {
 
 refreshBtn.addEventListener("click", async () => {
   await refreshActiveProject();
+  await loadOpenPrsForActiveProject();
 });
 
 commitBtn.addEventListener("click", async () => {
@@ -995,10 +1145,32 @@ commitBtn.addEventListener("click", async () => {
 
 pushBtn.addEventListener("click", async () => {
   await pushActiveProject();
+  await loadOpenPrsForActiveProject();
 });
 
 prBtn.addEventListener("click", async () => {
   await createPrForActiveProject();
+});
+
+refreshPrsBtn?.addEventListener("click", async () => {
+  await loadOpenPrsForActiveProject();
+});
+
+prListEl?.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-pr-index][data-pr-action]");
+  if (!button) return;
+
+  const index = Number(button.dataset.prIndex);
+  const action = button.dataset.prAction;
+  const item = prState.items[index];
+  if (!item || !item.url) return;
+
+  if (action === "app") {
+    openPrInGitHubApp(item.url);
+    return;
+  }
+
+  openPrInBrowser(item.url);
 });
 
 addAllBtn.addEventListener("click", async () => {
@@ -1026,6 +1198,7 @@ function init() {
   loadProjects();
   renderProjects();
   setActionButtonsState();
+  renderPrList();
 
   if (state.projects.length) {
     selectProject(state.projects[0].path);

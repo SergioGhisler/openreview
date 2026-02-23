@@ -557,6 +557,27 @@ input:focus {
   padding: 0.75rem;
 }
 
+.pr-panel-header {
+  border-top: 1px solid var(--border-color);
+}
+
+.pr-panel-content {
+  flex: 0 0 210px;
+  min-height: 120px;
+  max-height: 240px;
+}
+
+.compact-icon-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+}
+
+.compact-icon-btn i {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
 .diff-content {
   padding: 0;
 }
@@ -573,6 +594,89 @@ input:focus {
   font-size: 0.875rem;
   text-align: center;
   padding: 2rem 0;
+}
+
+.pr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pr-list.empty {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 1rem 0.25rem;
+}
+
+.pr-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.45rem 0.5rem;
+  background-color: transparent;
+}
+
+.pr-item:hover {
+  background-color: var(--panel-hover);
+}
+
+.pr-item-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.pr-item-title {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-main);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pr-item-number {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.pr-item-meta {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.pr-item-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pr-open-btn,
+.pr-app-btn {
+  font-size: 0.66rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.14rem 0.45rem;
+  color: var(--text-muted);
+}
+
+.pr-open-btn:hover,
+.pr-app-btn:hover {
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .file-item {

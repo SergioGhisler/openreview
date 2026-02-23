@@ -580,6 +580,51 @@ app.post("/api/projects/pr", async (req, res) => {
   }
 });
 
+app.get("/api/projects/prs", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    await ensureGitRepository(projectPath);
+
+    const listResult = await runCommand(
+      "gh",
+      [
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "50",
+        "--json",
+        "number,title,url,headRefName,baseRefName,updatedAt,author"
+      ],
+      { cwd: projectPath }
+    );
+
+    let prs = [];
+    try {
+      const parsed = JSON.parse(listResult.stdout || "[]");
+      prs = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      prs = [];
+    }
+
+    res.json({ path: projectPath, prs });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}`;
+    if (
+      error.code === "ENOENT" ||
+      message.includes("gh: command not found") ||
+      message.toLowerCase().includes("not logged into") ||
+      message.toLowerCase().includes("authenticate")
+    ) {
+      res.status(400).json({ error: "GitHub CLI is required and must be authenticated (run: gh auth login)." });
+      return;
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not load open pull requests." });
+  }
+});
+
 app.get("/api/projects/search", async (req, res) => {
   try {
     const query = typeof req.query.query === "string" ? req.query.query : "";
