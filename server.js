@@ -91,6 +91,60 @@ function parseStatusLine(line) {
   return { file, xy, status, staged, unstaged };
 }
 
+function parseWorktreeList(stdout) {
+  const lines = String(stdout || "").split("\n");
+  const worktrees = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (!current || !current.path) return;
+    const branchName = current.branchRef
+      ? current.branchRef.replace("refs/heads/", "")
+      : current.detached
+        ? "detached"
+        : "unknown";
+
+    worktrees.push({
+      path: current.path,
+      branch: branchName,
+      head: current.head || "",
+      detached: Boolean(current.detached),
+      bare: Boolean(current.bare)
+    });
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      pushCurrent();
+      current = null;
+      continue;
+    }
+
+    if (line.startsWith("worktree ")) {
+      pushCurrent();
+      current = { path: line.slice("worktree ".length) };
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (line.startsWith("HEAD ")) {
+      current.head = line.slice("HEAD ".length);
+    } else if (line.startsWith("branch ")) {
+      current.branchRef = line.slice("branch ".length);
+    } else if (line === "detached") {
+      current.detached = true;
+    } else if (line === "bare") {
+      current.bare = true;
+    }
+  }
+
+  pushCurrent();
+  return worktrees;
+}
+
 async function getProjectSnapshot(projectPath) {
   const name = path.basename(projectPath);
   const git = await isGitRepository(projectPath);
@@ -471,6 +525,27 @@ app.get("/api/projects/search", async (req, res) => {
     res.json({ query, matches });
   } catch {
     res.json({ query: req.query.query || "", matches: [] });
+  }
+});
+
+app.get("/api/projects/worktrees", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    await ensureGitRepository(projectPath);
+
+    const result = await runCommand("git", ["worktree", "list", "--porcelain"], {
+      cwd: projectPath
+    });
+
+    const worktrees = parseWorktreeList(result.stdout).map((item) => ({
+      ...item,
+      name: path.basename(item.path),
+      current: item.path === projectPath
+    }));
+
+    res.json({ path: projectPath, worktrees });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load worktrees." });
   }
 });
 

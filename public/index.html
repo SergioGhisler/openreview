@@ -58,7 +58,11 @@
               <i data-lucide="menu"></i>
             </button>
             <div class="project-info">
-              <h2 id="project-title">No project</h2>
+              <button id="project-switcher-btn" class="project-switcher-btn" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>
+                <h2 id="project-title">No project</h2>
+                <i data-lucide="chevrons-up-down"></i>
+              </button>
+              <div id="worktree-menu" class="worktree-menu" role="listbox" aria-label="Project worktrees"></div>
               <p id="project-meta" class="text-truncate">Open a project to start</p>
             </div>
           </div>

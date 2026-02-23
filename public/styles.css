@@ -385,6 +385,7 @@ input:focus {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
 
 .project-info h2 {
@@ -394,6 +395,109 @@ input:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.project-switcher-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.35rem;
+  margin-left: -0.35rem;
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  max-width: fit-content;
+}
+
+.project-switcher-btn:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.project-switcher-btn:not(:disabled):hover {
+  background-color: var(--panel-hover);
+}
+
+.project-switcher-btn i {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--text-muted);
+}
+
+.worktree-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  min-width: 280px;
+  max-width: min(460px, 82vw);
+  display: none;
+  flex-direction: column;
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 45;
+  overflow: hidden;
+}
+
+.worktree-menu.visible {
+  display: flex;
+}
+
+.worktree-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.worktree-item:last-child {
+  border-bottom: none;
+}
+
+.worktree-item:hover,
+.worktree-item.active {
+  background-color: var(--panel-hover);
+}
+
+.worktree-item strong {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.worktree-item small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.worktree-item .branch-pill {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.08rem 0.35rem;
+}
+
+.worktree-item.active .branch-pill {
+  color: var(--accent-text);
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+.worktree-menu-empty {
+  padding: 0.65rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .project-info p {

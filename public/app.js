@@ -11,6 +11,8 @@ const filesListEl = document.getElementById("files-list");
 const diffViewerEl = document.getElementById("diff-viewer");
 const projectTitleEl = document.getElementById("project-title");
 const projectMetaEl = document.getElementById("project-meta");
+const projectSwitcherBtn = document.getElementById("project-switcher-btn");
+const worktreeMenuEl = document.getElementById("worktree-menu");
 const refreshBtn = document.getElementById("refresh-btn");
 const commitBtn = document.getElementById("commit-btn");
 const pushBtn = document.getElementById("push-btn");
@@ -43,6 +45,13 @@ const actionState = {
   staging: false,
   committing: false,
   pushing: false
+};
+
+const worktreeState = {
+  visible: false,
+  loading: false,
+  switching: false,
+  items: []
 };
 
 const swipeConfig = {
@@ -182,6 +191,108 @@ function escapeHtml(value) {
 
 function setDiffMessage(msg) {
   diffViewerEl.innerHTML = `<span class="diff-line diff-context">${escapeHtml(msg)}</span>`;
+}
+
+function closeWorktreeMenu() {
+  worktreeState.visible = false;
+  worktreeMenuEl.classList.remove("visible");
+  projectSwitcherBtn?.setAttribute("aria-expanded", "false");
+}
+
+function renderWorktreeMenu() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || !worktreeState.visible) {
+    worktreeMenuEl.innerHTML = "";
+    closeWorktreeMenu();
+    return;
+  }
+
+  if (worktreeState.loading) {
+    worktreeMenuEl.innerHTML = '<div class="worktree-menu-empty">Loading worktrees...</div>';
+    worktreeMenuEl.classList.add("visible");
+    return;
+  }
+
+  if (!worktreeState.items.length) {
+    worktreeMenuEl.innerHTML = '<div class="worktree-menu-empty">No worktrees found.</div>';
+    worktreeMenuEl.classList.add("visible");
+    return;
+  }
+
+  worktreeMenuEl.innerHTML = worktreeState.items
+    .map((item, index) => {
+      return `
+        <button type="button" class="worktree-item ${item.current ? "active" : ""}" data-worktree-index="${index}" role="option" aria-selected="${item.current ? "true" : "false"}">
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>${escapeHtml(item.path)}</small>
+          <span class="branch-pill">${escapeHtml(item.branch || "unknown")}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  worktreeMenuEl.classList.add("visible");
+}
+
+async function loadWorktreesForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    worktreeState.items = [];
+    return;
+  }
+
+  worktreeState.loading = true;
+  renderWorktreeMenu();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/worktrees?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load worktrees.");
+    worktreeState.items = payload.worktrees || [];
+  } catch (error) {
+    worktreeState.items = [];
+    showToast(error.message, true);
+  } finally {
+    worktreeState.loading = false;
+    renderWorktreeMenu();
+  }
+}
+
+async function toggleWorktreeMenu() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || worktreeState.switching) return;
+
+  if (worktreeState.visible) {
+    closeWorktreeMenu();
+    return;
+  }
+
+  worktreeState.visible = true;
+  projectSwitcherBtn?.setAttribute("aria-expanded", "true");
+  renderWorktreeMenu();
+  await loadWorktreesForActiveProject();
+}
+
+async function switchToWorktree(index) {
+  if (worktreeState.switching) return;
+  const picked = worktreeState.items[index];
+  if (!picked || !picked.path) return;
+
+  const existing = state.projects.find((project) => project.path === picked.path);
+  worktreeState.switching = true;
+
+  try {
+    if (existing) {
+      selectProject(picked.path);
+      await refreshActiveProject();
+    } else {
+      await openProject(picked.path);
+    }
+    closeWorktreeMenu();
+  } finally {
+    worktreeState.switching = false;
+  }
 }
 
 function getFilteredProjects(query) {
@@ -399,6 +510,8 @@ function renderProjectDetails() {
   if (!project) {
     projectTitleEl.textContent = "No project";
     projectMetaEl.textContent = "Open a project to start";
+    projectSwitcherBtn.disabled = true;
+    closeWorktreeMenu();
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "No data yet.";
     setDiffMessage("Pick a file to inspect its diff.");
@@ -410,6 +523,7 @@ function renderProjectDetails() {
   }
 
   setActionButtonsState();
+  projectSwitcherBtn.disabled = !project.isGit;
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
@@ -721,6 +835,7 @@ async function pushActiveProject() {
 function selectProject(projectPath) {
   state.activePath = projectPath;
   state.selectedFile = null;
+  closeWorktreeMenu();
   setDiffMessage("Pick a file to inspect its diff.");
   document.body.classList.remove("show-sidebar");
   document.body.classList.remove("viewing-diff");
@@ -838,6 +953,23 @@ pushBtn.addEventListener("click", async () => {
 
 addAllBtn.addEventListener("click", async () => {
   await stageAllActiveProject();
+});
+
+projectSwitcherBtn?.addEventListener("click", async () => {
+  await toggleWorktreeMenu();
+});
+
+worktreeMenuEl?.addEventListener("click", async (event) => {
+  const button = event.target.closest(".worktree-item");
+  if (!button) return;
+  const index = Number(button.dataset.worktreeIndex);
+  await switchToWorktree(index);
+});
+
+document.addEventListener("click", (event) => {
+  if (!worktreeState.visible) return;
+  if (projectSwitcherBtn?.contains(event.target) || worktreeMenuEl?.contains(event.target)) return;
+  closeWorktreeMenu();
 });
 
 function init() {
