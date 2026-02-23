@@ -445,17 +445,27 @@ input:focus {
 
 .worktree-item {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
+  align-items: stretch;
   width: 100%;
-  text-align: left;
-  padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
+  background-color: transparent;
+  transition: background-color 0.16s ease;
 }
 
 .worktree-item:last-child {
   border-bottom: none;
+}
+
+.worktree-pick-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  background-color: transparent;
 }
 
 .worktree-item:hover,
@@ -463,12 +473,12 @@ input:focus {
   background-color: var(--panel-hover);
 }
 
-.worktree-item strong {
+.worktree-pick-btn strong {
   font-size: 0.8rem;
   font-weight: 500;
 }
 
-.worktree-item small {
+.worktree-pick-btn small {
   font-size: 0.72rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -478,7 +488,7 @@ input:focus {
   width: 100%;
 }
 
-.worktree-item .branch-pill {
+.worktree-pick-btn .branch-pill {
   font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -491,6 +501,38 @@ input:focus {
 .worktree-item.active .branch-pill {
   color: var(--accent-text);
   border-color: rgba(37, 99, 235, 0.35);
+}
+
+.worktree-remove-btn {
+  align-self: center;
+  margin-right: 0.55rem;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  border-radius: var(--radius-full);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #fecaca;
+  background-color: rgba(239, 68, 68, 0.14);
+  flex-shrink: 0;
+}
+
+.worktree-remove-btn:hover:not(:disabled) {
+  color: #fff1f2;
+  border-color: rgba(239, 68, 68, 0.9);
+  background-color: rgba(239, 68, 68, 0.32);
+}
+
+.worktree-protected-pill {
+  align-self: center;
+  margin-right: 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
 }
 
 .worktree-menu-empty {

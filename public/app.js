@@ -58,6 +58,8 @@ const worktreeState = {
   visible: false,
   loading: false,
   switching: false,
+  removing: false,
+  removingPath: null,
   items: []
 };
 
@@ -410,12 +412,23 @@ function renderWorktreeMenu() {
 
   worktreeMenuEl.innerHTML = worktreeState.items
     .map((item, index) => {
+      const removingThis = worktreeState.removing && worktreeState.removingPath === item.path;
+      const protectedWorktree = item.current || item.branch === "main";
       return `
-        <button type="button" class="worktree-item ${item.current ? "active" : ""}" data-worktree-index="${index}" role="option" aria-selected="${item.current ? "true" : "false"}">
-          <strong>${escapeHtml(item.name)}</strong>
-          <small>${escapeHtml(item.path)}</small>
-          <span class="branch-pill">${escapeHtml(item.branch || "unknown")}</span>
-        </button>
+        <div class="worktree-item ${item.current ? "active" : ""}" role="option" aria-selected="${item.current ? "true" : "false"}">
+          <button type="button" class="worktree-pick-btn" data-worktree-index="${index}">
+            <strong>${escapeHtml(item.name)}</strong>
+            <small>${escapeHtml(item.path)}</small>
+            <span class="branch-pill">${escapeHtml(item.branch || "unknown")}</span>
+          </button>
+          ${
+            protectedWorktree
+              ? '<span class="worktree-protected-pill">Protected</span>'
+              : `<button type="button" class="worktree-remove-btn" data-worktree-index="${index}" aria-label="Remove worktree ${escapeHtml(item.name)}" ${worktreeState.removing ? "disabled" : ""}>${
+                  removingThis ? "Removing..." : "Remove"
+                }</button>`
+          }
+        </div>
       `;
     })
     .join("");
@@ -450,7 +463,7 @@ async function loadWorktreesForActiveProject() {
 
 async function toggleWorktreeMenu() {
   const project = getActiveProject();
-  if (!project || !project.isGit || worktreeState.switching) return;
+  if (!project || !project.isGit || worktreeState.switching || worktreeState.removing) return;
 
   if (worktreeState.visible) {
     closeWorktreeMenu();
@@ -464,7 +477,7 @@ async function toggleWorktreeMenu() {
 }
 
 async function switchToWorktree(index) {
-  if (worktreeState.switching) return;
+  if (worktreeState.switching || worktreeState.removing) return;
   const picked = worktreeState.items[index];
   if (!picked || !picked.path) return;
 
@@ -481,6 +494,49 @@ async function switchToWorktree(index) {
     closeWorktreeMenu();
   } finally {
     worktreeState.switching = false;
+  }
+}
+
+async function removeWorktree(index) {
+  if (worktreeState.switching || worktreeState.removing) return;
+  const picked = worktreeState.items[index];
+  if (!picked || !picked.path || picked.current) return;
+  if (picked.branch === "main") {
+    showToast("Main worktree is protected and cannot be removed.", true);
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Remove worktree "${picked.name}"?\n\nBranch: ${picked.branch || "unknown"}\nPath: ${picked.path}\n\nThis permanently deletes the worktree directory from disk.`
+  );
+  if (!confirmed) return;
+
+  const activeProjectPath = state.activePath;
+  worktreeState.removing = true;
+  worktreeState.removingPath = picked.path;
+  renderWorktreeMenu();
+
+  try {
+    const response = await fetch("/api/projects/worktrees/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: activeProjectPath, worktreePath: picked.path })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not remove worktree.");
+
+    worktreeState.items = payload.worktrees || [];
+    state.projects = state.projects.filter((project) => project.path !== payload.removedPath);
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Removed ${picked.name}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    worktreeState.removing = false;
+    worktreeState.removingPath = null;
+    renderWorktreeMenu();
   }
 }
 
@@ -1238,9 +1294,16 @@ projectSwitcherBtn?.addEventListener("click", async () => {
 });
 
 worktreeMenuEl?.addEventListener("click", async (event) => {
-  const button = event.target.closest(".worktree-item");
-  if (!button) return;
-  const index = Number(button.dataset.worktreeIndex);
+  const removeButton = event.target.closest(".worktree-remove-btn");
+  if (removeButton) {
+    const index = Number(removeButton.dataset.worktreeIndex);
+    await removeWorktree(index);
+    return;
+  }
+
+  const pickButton = event.target.closest(".worktree-pick-btn");
+  if (!pickButton) return;
+  const index = Number(pickButton.dataset.worktreeIndex);
   await switchToWorktree(index);
 });
 

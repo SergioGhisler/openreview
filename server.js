@@ -656,6 +656,70 @@ app.get("/api/projects/worktrees", async (req, res) => {
   }
 });
 
+app.post("/api/projects/worktrees/remove", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const targetPath = await ensureDirectory(req.body?.worktreePath);
+    const force = Boolean(req.body?.force);
+
+    await ensureGitRepository(projectPath);
+
+    const worktreeList = await runCommand("git", ["worktree", "list", "--porcelain"], {
+      cwd: projectPath
+    });
+
+    const worktrees = parseWorktreeList(worktreeList.stdout);
+    const target = worktrees.find((item) => item.path === targetPath);
+
+    if (!target) {
+      res.status(400).json({ error: "Selected path is not a worktree of this repository." });
+      return;
+    }
+
+    if (target.branch === "main") {
+      res.status(400).json({ error: "Main worktree is protected and cannot be removed." });
+      return;
+    }
+
+    if (target.path === projectPath) {
+      res.status(400).json({ error: "Cannot remove the currently opened worktree." });
+      return;
+    }
+
+    const args = ["worktree", "remove"];
+    if (force) args.push("--force");
+    args.push(target.path);
+
+    await runCommand("git", args, { cwd: projectPath });
+
+    const updated = await runCommand("git", ["worktree", "list", "--porcelain"], {
+      cwd: projectPath
+    });
+
+    const updatedWorktrees = parseWorktreeList(updated.stdout).map((item) => ({
+      ...item,
+      name: path.basename(item.path),
+      current: item.path === projectPath
+    }));
+
+    res.json({
+      path: projectPath,
+      removedPath: target.path,
+      worktrees: updatedWorktrees
+    });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}`.toLowerCase();
+    if (message.includes("contains modified") || message.includes("contains untracked")) {
+      res.status(400).json({
+        error: "Worktree has local changes. Commit/stash them first, or force remove."
+      });
+      return;
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not remove worktree." });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Local review web app running at http://localhost:${PORT}`);
 });
