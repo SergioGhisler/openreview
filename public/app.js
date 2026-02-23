@@ -45,6 +45,10 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function setDiffMessage(msg) {
+  diffViewerEl.innerHTML = `<span class="diff-line diff-context">${escapeHtml(msg)}</span>`;
+}
+
 function getFilteredProjects(query) {
   const term = query.trim().toLowerCase();
   if (!term) return state.projects;
@@ -262,7 +266,7 @@ function renderProjectDetails() {
     projectMetaEl.textContent = "Open a project to start";
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "No data yet.";
-    diffViewerEl.textContent = "Pick a file to inspect its diff.";
+    setDiffMessage("Pick a file to inspect its diff.");
     refreshBtn.disabled = true;
     filesCountEl.textContent = "0";
     diffFileNameEl.textContent = "Select a file";
@@ -284,14 +288,14 @@ function renderProjectDetails() {
   if (!project.isGit) {
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "This folder is not a git repository.";
-    diffViewerEl.textContent = "No diff available.";
+    setDiffMessage("No diff available.");
     return;
   }
 
   if (!project.changedFiles.length) {
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "Working tree is clean.";
-    diffViewerEl.textContent = "No local changes found.";
+    setDiffMessage("No local changes found.");
     return;
   }
 
@@ -325,17 +329,32 @@ async function openDiff(file) {
   try {
     state.selectedFile = file;
     renderProjectDetails();
-    diffViewerEl.textContent = "Loading diff...";
+    setDiffMessage("Loading diff...");
 
     const params = new URLSearchParams({ path: project.path, file });
     const response = await fetch(`/api/projects/diff?${params.toString()}`);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not load diff.");
 
-    diffViewerEl.textContent = payload.diff;
+    const lines = payload.diff.replace(/\r\n/g, '\n').split('\n');
+    let htmlLines = [];
+    for (const line of lines) {
+      if (line.startsWith('+++') || line.startsWith('---')) {
+        htmlLines.push(`<span class="diff-line diff-header-line">${escapeHtml(line)}</span>`);
+      } else if (line.startsWith('+')) {
+        htmlLines.push(`<span class="diff-line diff-added">${escapeHtml(line)}</span>`);
+      } else if (line.startsWith('-')) {
+        htmlLines.push(`<span class="diff-line diff-removed">${escapeHtml(line)}</span>`);
+      } else if (line.startsWith('@@')) {
+        htmlLines.push(`<span class="diff-line diff-chunk">${escapeHtml(line)}</span>`);
+      } else {
+        htmlLines.push(`<span class="diff-line diff-context">${escapeHtml(line)}</span>`);
+      }
+    }
+    diffViewerEl.innerHTML = htmlLines.join('\n');
   } catch (error) {
     showToast(error.message, true);
-    diffViewerEl.textContent = "Could not load diff.";
+    setDiffMessage("Could not load diff.");
   }
 }
 
@@ -354,7 +373,7 @@ async function refreshActiveProject() {
 
     if (state.selectedFile && !payload.changedFiles.some((f) => f.file === state.selectedFile)) {
       state.selectedFile = null;
-      diffViewerEl.textContent = "Pick a file to inspect its diff.";
+      setDiffMessage("Pick a file to inspect its diff.");
     }
 
     renderProjects();
@@ -367,7 +386,7 @@ async function refreshActiveProject() {
 function selectProject(projectPath) {
   state.activePath = projectPath;
   state.selectedFile = null;
-  diffViewerEl.textContent = "Pick a file to inspect its diff.";
+  setDiffMessage("Pick a file to inspect its diff.");
   document.body.classList.remove("show-sidebar");
   document.body.classList.remove("viewing-diff");
   renderProjects();
