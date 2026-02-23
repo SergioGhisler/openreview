@@ -340,16 +340,13 @@ function renderPrList() {
       const updated = formatRelativeDate(item.updatedAt);
       const branchMeta = `${item.headRefName || "?"} -> ${item.baseRefName || "?"}`;
       return `
-        <div class="pr-item">
+        <div class="pr-item" data-pr-index="${index}" role="button" tabindex="0" aria-label="Open pull request ${escapeHtml(item.title || "Untitled")}">
           <div class="pr-item-top">
             <span class="pr-item-title">${escapeHtml(item.title || "Untitled")}</span>
             <span class="pr-item-number">#${escapeHtml(item.number || "")}</span>
           </div>
           <div class="pr-item-meta">${escapeHtml(branchMeta)}</div>
           <div class="pr-item-meta">${escapeHtml(author)} ${escapeHtml(updated)}</div>
-          <div class="pr-item-actions">
-            <button type="button" class="pr-open-btn" data-pr-index="${index}">Open PR</button>
-          </div>
         </div>
       `;
     })
@@ -1209,10 +1206,23 @@ prToggleBtn?.addEventListener("click", async () => {
 });
 
 prListEl?.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-pr-index]");
-  if (!button) return;
+  const card = event.target.closest(".pr-item[data-pr-index]");
+  if (!card) return;
 
-  const index = Number(button.dataset.prIndex);
+  const index = Number(card.dataset.prIndex);
+  const item = prState.items[index];
+  if (!item || !item.url) return;
+
+  openPrPreferred(item.url);
+});
+
+prListEl?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest(".pr-item[data-pr-index]");
+  if (!card) return;
+
+  event.preventDefault();
+  const index = Number(card.dataset.prIndex);
   const item = prState.items[index];
   if (!item || !item.url) return;
 

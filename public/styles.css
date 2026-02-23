@@ -660,10 +660,16 @@ input:focus {
   border-radius: var(--radius-md);
   padding: 0.45rem 0.5rem;
   background-color: transparent;
+  cursor: pointer;
 }
 
 .pr-item:hover {
   background-color: var(--panel-hover);
+}
+
+.pr-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .pr-item-top {
@@ -696,26 +702,6 @@ input:focus {
   font-size: 0.68rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
-}
-
-.pr-item-actions {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.pr-open-btn {
-  font-size: 0.66rem;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-full);
-  padding: 0.14rem 0.45rem;
-  color: var(--text-muted);
-}
-
-.pr-open-btn:hover {
-  color: var(--text-main);
-  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .file-item {
