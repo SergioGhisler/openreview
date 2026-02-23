@@ -561,10 +561,51 @@ input:focus {
   border-top: 1px solid var(--border-color);
 }
 
+.pr-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 1;
+  text-align: left;
+  color: var(--text-main);
+}
+
+.pr-toggle-btn h3 {
+  margin-right: 0;
+}
+
+.pr-toggle-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--text-muted);
+  transition: transform 180ms ease;
+}
+
+.pr-section.expanded .pr-toggle-icon {
+  transform: rotate(180deg);
+}
+
+.pr-section.collapsed .pr-panel-header {
+  padding-top: 0.95rem;
+  padding-bottom: 0.95rem;
+}
+
 .pr-panel-content {
-  flex: 0 0 210px;
-  min-height: 120px;
-  max-height: 240px;
+  flex: 0 0 auto;
+  max-height: 0;
+  min-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  transition: max-height 240ms cubic-bezier(0.2, 0.85, 0.2, 1), opacity 180ms ease, padding 180ms ease;
+}
+
+.pr-section.expanded .pr-panel-content {
+  max-height: 260px;
+  opacity: 1;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
 }
 
 .compact-icon-btn {
@@ -664,8 +705,7 @@ input:focus {
   gap: 0.35rem;
 }
 
-.pr-open-btn,
-.pr-app-btn {
+.pr-open-btn {
   font-size: 0.66rem;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
@@ -673,8 +713,7 @@ input:focus {
   color: var(--text-muted);
 }
 
-.pr-open-btn:hover,
-.pr-app-btn:hover {
+.pr-open-btn:hover {
   color: var(--text-main);
   border-color: rgba(255, 255, 255, 0.22);
 }

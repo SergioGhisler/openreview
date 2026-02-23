@@ -89,14 +89,20 @@
             <div class="panel-content">
               <div id="files-list" class="files-list empty">No data yet.</div>
             </div>
-            <div class="panel-header pr-panel-header">
-              <h3>Open PRs</h3>
-              <button id="refresh-prs-btn" class="icon-btn compact-icon-btn" aria-label="Refresh pull requests">
-                <i data-lucide="rotate-cw"></i>
-              </button>
-            </div>
-            <div class="panel-content pr-panel-content">
-              <div id="pr-list" class="pr-list empty">Select a git project to load pull requests.</div>
+            <div id="pr-section" class="pr-section collapsed">
+              <div class="panel-header pr-panel-header">
+                <button id="pr-toggle-btn" class="pr-toggle-btn" type="button" aria-expanded="false" aria-controls="pr-panel-content">
+                  <h3>Open PRs</h3>
+                  <span id="pr-count" class="badge">0</span>
+                  <i class="pr-toggle-icon" data-lucide="chevron-down"></i>
+                </button>
+                <button id="refresh-prs-btn" class="icon-btn compact-icon-btn" aria-label="Refresh pull requests">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+              </div>
+              <div id="pr-panel-content" class="panel-content pr-panel-content">
+                <div id="pr-list" class="pr-list empty">Select a git project to load pull requests.</div>
+              </div>
             </div>
           </div>
 

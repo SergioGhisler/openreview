@@ -29,6 +29,9 @@ const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
+const prSectionEl = document.getElementById("pr-section");
+const prToggleBtn = document.getElementById("pr-toggle-btn");
+const prCountEl = document.getElementById("pr-count");
 const prListEl = document.getElementById("pr-list");
 const refreshPrsBtn = document.getElementById("refresh-prs-btn");
 
@@ -61,7 +64,8 @@ const worktreeState = {
 const prState = {
   loading: false,
   items: [],
-  error: null
+  error: null,
+  expanded: false
 };
 
 const swipeConfig = {
@@ -235,31 +239,73 @@ function openPrInBrowser(url) {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-function openPrInGitHubApp(url) {
+function openPrPreferred(url) {
   const appUrl = toGitHubAppUrl(url);
   if (!appUrl) {
     openPrInBrowser(url);
     return;
   }
 
-  let fallbackOpened = false;
-  const fallbackId = setTimeout(() => {
-    fallbackOpened = true;
+  let cancelled = false;
+  let appSwitchDetected = false;
+  let fallbackId = null;
+
+  const cleanup = () => {
+    document.removeEventListener("visibilitychange", cancelOnHidden);
+    window.removeEventListener("pagehide", cancelOnHidden);
+    window.removeEventListener("blur", cancelOnHidden);
+  };
+
+  const cancelFallback = () => {
+    cancelled = true;
+    if (fallbackId) {
+      clearTimeout(fallbackId);
+      fallbackId = null;
+    }
+    cleanup();
+  };
+
+  const cancelOnHidden = (event) => {
+    if (event?.type === "blur" || event?.type === "pagehide") {
+      appSwitchDetected = true;
+      cancelFallback();
+      return;
+    }
+
+    if (document.visibilityState === "visible") return;
+
+    appSwitchDetected = true;
+    cancelFallback();
+  };
+
+  fallbackId = setTimeout(() => {
+    if (cancelled || appSwitchDetected) return;
     openPrInBrowser(url);
-  }, 800);
+    cancelFallback();
+  }, 1200);
+
+  document.addEventListener("visibilitychange", cancelOnHidden);
+  window.addEventListener("pagehide", cancelOnHidden);
+  window.addEventListener("blur", cancelOnHidden);
 
   window.location.href = appUrl;
+}
 
-  setTimeout(() => {
-    if (!fallbackOpened) {
-      clearTimeout(fallbackId);
-    }
-  }, 1200);
+function setPrPanelExpanded(expanded) {
+  prState.expanded = expanded;
+  prSectionEl?.classList.toggle("expanded", expanded);
+  prSectionEl?.classList.toggle("collapsed", !expanded);
+  prToggleBtn?.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function togglePrPanel() {
+  setPrPanelExpanded(!prState.expanded);
 }
 
 function renderPrList() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
+  prCountEl.textContent = String(prState.items.length);
 
   refreshPrsBtn.disabled = !isGitProject || prState.loading;
 
@@ -302,8 +348,7 @@ function renderPrList() {
           <div class="pr-item-meta">${escapeHtml(branchMeta)}</div>
           <div class="pr-item-meta">${escapeHtml(author)} ${escapeHtml(updated)}</div>
           <div class="pr-item-actions">
-            <button type="button" class="pr-open-btn" data-pr-index="${index}" data-pr-action="browser">Open tab</button>
-            <button type="button" class="pr-app-btn" data-pr-index="${index}" data-pr-action="app">GitHub app</button>
+            <button type="button" class="pr-open-btn" data-pr-index="${index}">Open PR</button>
           </div>
         </div>
       `;
@@ -1012,8 +1057,8 @@ async function createPrForActiveProject() {
     if (!response.ok) throw new Error(payload.error || "Could not create pull request.");
 
     if (payload.url) {
-      openPrInBrowser(payload.url);
-      showToast("PR created and opened in browser.");
+      openPrPreferred(payload.url);
+      showToast("PR created and opened.");
     } else {
       showToast("PR created.");
     }
@@ -1156,21 +1201,22 @@ refreshPrsBtn?.addEventListener("click", async () => {
   await loadOpenPrsForActiveProject();
 });
 
+prToggleBtn?.addEventListener("click", async () => {
+  togglePrPanel();
+  if (prState.expanded && !prState.loading && !prState.items.length && !prState.error) {
+    await loadOpenPrsForActiveProject();
+  }
+});
+
 prListEl?.addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-pr-index][data-pr-action]");
+  const button = event.target.closest("button[data-pr-index]");
   if (!button) return;
 
   const index = Number(button.dataset.prIndex);
-  const action = button.dataset.prAction;
   const item = prState.items[index];
   if (!item || !item.url) return;
 
-  if (action === "app") {
-    openPrInGitHubApp(item.url);
-    return;
-  }
-
-  openPrInBrowser(item.url);
+  openPrPreferred(item.url);
 });
 
 addAllBtn.addEventListener("click", async () => {
@@ -1198,6 +1244,7 @@ function init() {
   loadProjects();
   renderProjects();
   setActionButtonsState();
+  setPrPanelExpanded(false);
   renderPrList();
 
   if (state.projects.length) {
