@@ -417,6 +417,11 @@ function renderPrList() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   prCountEl.textContent = String(prState.items.length);
+  if (prState.items.length > 0) {
+    prSectionEl?.classList.remove("hidden");
+  } else {
+    prSectionEl?.classList.add("hidden");
+  }
 
   refreshPrsBtn.disabled = !isGitProject || prState.loading;
 
@@ -879,6 +884,7 @@ function renderProjectDetails() {
     document.body.classList.remove("viewing-diff");
     prState.items = [];
     prState.error = null;
+    prSectionEl?.classList.add("hidden");
     outgoingState.items = [];
     outgoingState.error = null;
     outgoingSectionEl?.classList.add("hidden");
@@ -918,6 +924,7 @@ function renderProjectDetails() {
     filesListEl.textContent = "This folder is not a git repository.";
     setDiffMessage("No diff available.");
     setActionButtonsState();
+    prSectionEl?.classList.add("hidden");
     outgoingSectionEl?.classList.add("hidden");
     return;
   }

@@ -721,6 +721,10 @@ input:focus {
   padding-bottom: 0.9rem;
 }
 
+.pr-section.hidden {
+  display: none;
+}
+
 .pr-section.collapsed .pr-panel-header {
   padding-top: 0.95rem;
   padding-bottom: 0.95rem;
