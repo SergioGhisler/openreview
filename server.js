@@ -221,6 +221,13 @@ async function ensureGitRepository(projectPath) {
   }
 }
 
+async function syncRemoteRefs(projectPath) {
+  await runCommand("git", ["fetch", "--prune", "--quiet"], {
+    cwd: projectPath,
+    okExitCodes: [0, 1, 128]
+  }).catch(() => null);
+}
+
 function expandUserPath(inputPath) {
   const trimmed = String(inputPath || "").trim();
   if (!trimmed) return "";
@@ -363,6 +370,9 @@ async function searchDirectories(query) {
 app.post("/api/projects/open", async (req, res) => {
   try {
     const projectPath = await ensureDirectory(req.body?.path);
+    if (await isGitRepository(projectPath)) {
+      await syncRemoteRefs(projectPath);
+    }
     const snapshot = await getProjectSnapshot(projectPath);
     res.json(snapshot);
   } catch (error) {
@@ -373,6 +383,9 @@ app.post("/api/projects/open", async (req, res) => {
 app.get("/api/projects/changes", async (req, res) => {
   try {
     const projectPath = await ensureDirectory(req.query.path);
+    if (await isGitRepository(projectPath)) {
+      await syncRemoteRefs(projectPath);
+    }
     const snapshot = await getProjectSnapshot(projectPath);
     res.json(snapshot);
   } catch (error) {
@@ -571,12 +584,15 @@ app.post("/api/projects/pull", async (req, res) => {
       { cwd: projectPath, okExitCodes: [0, 128] }
     );
 
-    if (upstreamCheck.code !== 0) {
-      res.status(400).json({ error: "No upstream branch is configured. Set upstream before pulling." });
-      return;
+    if (upstreamCheck.code === 0) {
+      await runCommand("git", ["pull", "--ff-only"], { cwd: projectPath });
+    } else {
+      await runCommand("git", ["pull", "--ff-only", "origin", branch], { cwd: projectPath });
+      await runCommand("git", ["branch", "--set-upstream-to", `origin/${branch}`, branch], {
+        cwd: projectPath,
+        okExitCodes: [0, 128]
+      }).catch(() => null);
     }
-
-    await runCommand("git", ["pull", "--ff-only"], { cwd: projectPath });
 
     const snapshot = await getProjectSnapshot(projectPath);
     res.json({ path: projectPath, branch, snapshot });

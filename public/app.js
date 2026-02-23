@@ -108,7 +108,6 @@ function setActionButtonsState() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
-  const hasUpstream = Boolean(project && project.remote && project.remote.hasUpstream);
   const busy =
     actionState.staging ||
     actionState.committing ||
@@ -118,7 +117,7 @@ function setActionButtonsState() {
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
-  pullBtn.disabled = !isGitProject || !hasUpstream || busy;
+  pullBtn.disabled = !isGitProject || busy;
   pushBtn.disabled = !isGitProject || busy;
   prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
@@ -1224,6 +1223,7 @@ function selectProject(projectPath) {
   document.body.classList.remove("viewing-diff");
   renderProjects();
   renderProjectDetails();
+  void refreshActiveProject();
   void loadOpenPrsForActiveProject();
 }
 
