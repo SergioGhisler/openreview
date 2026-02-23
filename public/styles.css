@@ -91,6 +91,25 @@ button:disabled {
   font-size: 0.875rem;
 }
 
+.secondary-btn {
+  background-color: transparent;
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  padding: 0.55rem 0.9rem;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  font-size: 0.875rem;
+}
+
+.secondary-btn:hover:not(:disabled) {
+  background-color: var(--panel-hover);
+}
+
+.secondary-btn.compact {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+}
+
 .primary-btn:hover:not(:disabled) {
   background-color: var(--accent-hover);
 }
@@ -348,6 +367,12 @@ input:focus {
   background-color: var(--panel-bg);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .header-left {
   display: flex;
   align-items: center;
@@ -418,6 +443,7 @@ input:focus {
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-main);
+  margin-right: auto;
 }
 
 .panel-content,
@@ -479,6 +505,36 @@ input:focus {
   font-weight: 700;
   text-transform: uppercase;
   margin-left: 0.5rem;
+}
+
+.file-item-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.5rem;
+}
+
+.file-action-btn {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.1rem 0.45rem;
+  font-size: 0.65rem;
+  color: var(--text-main);
+  background-color: transparent;
+}
+
+.file-action-btn:hover {
+  background-color: var(--panel-hover);
+}
+
+.stage-pill {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.08rem 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .status-m {
@@ -571,6 +627,16 @@ input:focus {
 
   .top-header {
     padding: 0 0.75rem;
+  }
+
+  .header-actions {
+    gap: 0.3rem;
+  }
+
+  .header-actions .primary-btn,
+  .header-actions .secondary-btn {
+    padding: 0.5rem 0.7rem;
+    font-size: 0.8rem;
   }
 
   /* Sidebar Drawer */

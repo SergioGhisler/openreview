@@ -12,6 +12,8 @@ const diffViewerEl = document.getElementById("diff-viewer");
 const projectTitleEl = document.getElementById("project-title");
 const projectMetaEl = document.getElementById("project-meta");
 const refreshBtn = document.getElementById("refresh-btn");
+const commitBtn = document.getElementById("commit-btn");
+const pushBtn = document.getElementById("push-btn");
 const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
 const projectSuggestionsEl = document.getElementById("project-suggestions");
@@ -23,6 +25,7 @@ const sidebarOverlay = document.getElementById("sidebar-overlay");
 const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
+const addAllBtn = document.getElementById("add-all-btn");
 
 const suggestionState = {
   visible: false,
@@ -35,6 +38,49 @@ const searchState = {
   requestToken: 0,
   debounceId: null
 };
+
+const actionState = {
+  staging: false,
+  committing: false,
+  pushing: false
+};
+
+function isFileStaged(file) {
+  if (typeof file.staged === "boolean") return file.staged;
+  const xy = String(file.xy || "  ");
+  return xy[0] !== " " && xy[0] !== "?";
+}
+
+function isFileUnstaged(file) {
+  if (typeof file.unstaged === "boolean") return file.unstaged;
+  const xy = String(file.xy || "  ");
+  return xy[1] !== " ";
+}
+
+function getProjectStageStats(project) {
+  if (!project || !project.changedFiles) return { stagedCount: 0, unstagedCount: 0 };
+  let stagedCount = 0;
+  let unstagedCount = 0;
+
+  for (const file of project.changedFiles) {
+    if (isFileStaged(file)) stagedCount += 1;
+    if (isFileUnstaged(file) || file.xy === "??") unstagedCount += 1;
+  }
+
+  return { stagedCount, unstagedCount };
+}
+
+function setActionButtonsState() {
+  const project = getActiveProject();
+  const isGitProject = Boolean(project && project.isGit);
+  const { stagedCount, unstagedCount } = getProjectStageStats(project);
+  const busy = actionState.staging || actionState.committing || actionState.pushing;
+
+  refreshBtn.disabled = !project || busy;
+  commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
+  pushBtn.disabled = !isGitProject || busy;
+  addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
+}
 
 function escapeHtml(value) {
   return String(value)
@@ -267,14 +313,14 @@ function renderProjectDetails() {
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "No data yet.";
     setDiffMessage("Pick a file to inspect its diff.");
-    refreshBtn.disabled = true;
+    setActionButtonsState();
     filesCountEl.textContent = "0";
     diffFileNameEl.textContent = "Select a file";
     document.body.classList.remove("viewing-diff");
     return;
   }
 
-  refreshBtn.disabled = false;
+  setActionButtonsState();
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
@@ -289,6 +335,7 @@ function renderProjectDetails() {
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "This folder is not a git repository.";
     setDiffMessage("No diff available.");
+    setActionButtonsState();
     return;
   }
 
@@ -296,26 +343,59 @@ function renderProjectDetails() {
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "Working tree is clean.";
     setDiffMessage("No local changes found.");
+    setActionButtonsState();
     return;
   }
 
   filesListEl.className = "files-list";
   filesListEl.innerHTML = project.changedFiles
-    .map((item) => {
+    .map((item, index) => {
       const isActive = state.selectedFile === item.file;
       const statusClass = `status-${item.status[0].toLowerCase()}`; // A, M, D etc -> status-a
+      const staged = isFileStaged(item);
+      const unstaged = isFileUnstaged(item) || item.xy === "??";
+      const stageLabel = staged && unstaged ? "staged+unstaged" : staged ? "staged" : "unstaged";
+      const addButton = unstaged
+        ? `<button type="button" class="file-action-btn" data-add-index="${index}">Add</button>`
+        : "";
       return `
-        <button class="file-item ${isActive ? "active" : ""}" data-file="${item.file}">
+        <div class="file-item ${isActive ? "active" : ""}" data-file-index="${index}" role="button" tabindex="0">
           <span class="path">${item.file}</span>
-          <span class="status ${statusClass}">${item.status}</span>
-        </button>
+          <span class="file-item-right">
+            ${addButton}
+            <span class="status ${statusClass}">${item.status}</span>
+            <span class="stage-pill">${stageLabel}</span>
+          </span>
+        </div>
       `;
     })
     .join("");
 
+  document.querySelectorAll(".file-action-btn").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const index = Number(button.dataset.addIndex);
+      const item = getActiveProject()?.changedFiles?.[index];
+      if (!item) return;
+      await stageFile(item.file);
+    });
+  });
+
   document.querySelectorAll(".file-item").forEach((button) => {
     button.addEventListener("click", async () => {
-      const file = button.dataset.file;
+      const index = Number(button.dataset.fileIndex);
+      const file = getActiveProject()?.changedFiles?.[index]?.file;
+      if (!file) return;
+      document.body.classList.add("viewing-diff");
+      await openDiff(file);
+    });
+
+    button.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      const index = Number(button.dataset.fileIndex);
+      const file = getActiveProject()?.changedFiles?.[index]?.file;
+      if (!file) return;
       document.body.classList.add("viewing-diff");
       await openDiff(file);
     });
@@ -380,6 +460,133 @@ async function refreshActiveProject() {
     renderProjectDetails();
   } catch (error) {
     showToast(error.message, true);
+  }
+}
+
+async function stageFile(file) {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+  if (!file) return;
+
+  actionState.staging = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/stage-file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, file })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not stage file.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Added ${file}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.staging = false;
+    setActionButtonsState();
+  }
+}
+
+async function stageAllActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+
+  actionState.staging = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/stage-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not stage changes.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast("Added all files");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.staging = false;
+    setActionButtonsState();
+  }
+}
+
+async function commitActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pushing) return;
+
+  const message = window.prompt("Commit message:");
+  if (message === null) return;
+  const cleanMessage = message.trim();
+  if (!cleanMessage) {
+    showToast("Commit message is required.", true);
+    return;
+  }
+
+  actionState.committing = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, message: cleanMessage })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not commit changes.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    state.selectedFile = null;
+    setDiffMessage("Pick a file to inspect its diff.");
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Committed ${payload.hash}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.committing = false;
+    setActionButtonsState();
+  }
+}
+
+async function pushActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pushing) return;
+
+  actionState.pushing = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not push changes.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Pushed ${payload.branch}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.pushing = false;
+    setActionButtonsState();
   }
 }
 
@@ -493,9 +700,22 @@ refreshBtn.addEventListener("click", async () => {
   await refreshActiveProject();
 });
 
+commitBtn.addEventListener("click", async () => {
+  await commitActiveProject();
+});
+
+pushBtn.addEventListener("click", async () => {
+  await pushActiveProject();
+});
+
+addAllBtn.addEventListener("click", async () => {
+  await stageAllActiveProject();
+});
+
 function init() {
   loadProjects();
   renderProjects();
+  setActionButtonsState();
 
   if (state.projects.length) {
     selectProject(state.projects[0].path);

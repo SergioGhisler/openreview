@@ -62,9 +62,13 @@
               <p id="project-meta" class="text-truncate">Open a project to start</p>
             </div>
           </div>
-          <button id="refresh-btn" class="icon-btn" aria-label="Refresh" disabled>
-            <i data-lucide="refresh-cw"></i>
-          </button>
+          <div class="header-actions">
+            <button id="commit-btn" class="secondary-btn" disabled>Commit</button>
+            <button id="push-btn" class="primary-btn" disabled>Push</button>
+            <button id="refresh-btn" class="icon-btn" aria-label="Refresh" disabled>
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
         </header>
 
         <!-- Two column workspace (Files & Diff) -->
@@ -74,6 +78,7 @@
           <div class="files-panel" id="files-panel">
             <div class="panel-header">
               <h3>Changed Files</h3>
+              <button id="add-all-btn" class="secondary-btn compact">Add All</button>
               <span id="files-count" class="badge">0</span>
             </div>
             <div class="panel-content">

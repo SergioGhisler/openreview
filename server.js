@@ -85,7 +85,10 @@ function parseStatusLine(line) {
   else if (xy.includes("R")) status = "renamed";
   else if (xy.includes("C")) status = "copied";
 
-  return { file, xy, status };
+  const staged = xy[0] !== " " && xy[0] !== "?";
+  const unstaged = xy[1] !== " ";
+
+  return { file, xy, status, staged, unstaged };
 }
 
 async function getProjectSnapshot(projectPath) {
@@ -119,6 +122,15 @@ async function getProjectSnapshot(projectPath) {
     branch: branchResult.stdout.trim() || "no-commit-branch",
     changedFiles
   };
+}
+
+async function ensureGitRepository(projectPath) {
+  const git = await isGitRepository(projectPath);
+  if (!git) {
+    const error = new Error("Selected project is not a git repository.");
+    error.status = 400;
+    throw error;
+  }
 }
 
 function expandUserPath(inputPath) {
@@ -290,11 +302,7 @@ app.get("/api/projects/diff", async (req, res) => {
       return;
     }
 
-    const git = await isGitRepository(projectPath);
-    if (!git) {
-      res.status(400).json({ error: "Selected project is not a git repository." });
-      return;
-    }
+    await ensureGitRepository(projectPath);
 
     const [unstaged, staged] = await Promise.all([
       runCommand("git", ["diff", "--", file], { cwd: projectPath }),
@@ -316,6 +324,108 @@ app.get("/api/projects/diff", async (req, res) => {
     res.json({ path: projectPath, file, diff: diff || "No diff output for this file." });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "Unexpected server error." });
+  }
+});
+
+app.post("/api/projects/commit", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const message = String(req.body?.message || "").trim();
+
+    if (!message) {
+      res.status(400).json({ error: "Commit message is required." });
+      return;
+    }
+
+    await ensureGitRepository(projectPath);
+
+    const stagedFiles = await runCommand("git", ["diff", "--cached", "--name-only"], {
+      cwd: projectPath
+    });
+
+    if (!stagedFiles.stdout.trim()) {
+      res.status(400).json({ error: "No staged changes to commit." });
+      return;
+    }
+
+    await runCommand("git", ["commit", "-m", message], { cwd: projectPath });
+    const commitRef = await runCommand("git", ["rev-parse", "--short", "HEAD"], { cwd: projectPath });
+    const snapshot = await getProjectSnapshot(projectPath);
+
+    res.json({
+      path: projectPath,
+      hash: commitRef.stdout.trim(),
+      snapshot
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not commit changes." });
+  }
+});
+
+app.post("/api/projects/stage-all", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    await ensureGitRepository(projectPath);
+
+    await runCommand("git", ["add", "-A"], { cwd: projectPath });
+    const snapshot = await getProjectSnapshot(projectPath);
+
+    res.json({ path: projectPath, snapshot });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not stage all changes." });
+  }
+});
+
+app.post("/api/projects/stage-file", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const file = String(req.body?.file || "").trim();
+
+    if (!file) {
+      res.status(400).json({ error: "File path is required." });
+      return;
+    }
+
+    await ensureGitRepository(projectPath);
+
+    await runCommand("git", ["add", "--", file], { cwd: projectPath });
+    const snapshot = await getProjectSnapshot(projectPath);
+
+    res.json({ path: projectPath, file, snapshot });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not stage file." });
+  }
+});
+
+app.post("/api/projects/push", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    await ensureGitRepository(projectPath);
+
+    const currentBranch = await runCommand("git", ["branch", "--show-current"], { cwd: projectPath });
+    const branch = currentBranch.stdout.trim();
+
+    if (!branch) {
+      res.status(400).json({ error: "Cannot push while HEAD is detached." });
+      return;
+    }
+
+    const upstreamCheck = await runCommand(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { cwd: projectPath, okExitCodes: [0, 128] }
+    );
+
+    if (upstreamCheck.code === 0) {
+      await runCommand("git", ["push"], { cwd: projectPath });
+    } else {
+      await runCommand("git", ["push", "-u", "origin", branch], { cwd: projectPath });
+    }
+
+    const snapshot = await getProjectSnapshot(projectPath);
+    res.json({ path: projectPath, branch, snapshot });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not push changes." });
   }
 });
 
