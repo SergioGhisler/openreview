@@ -108,6 +108,7 @@ function setActionButtonsState() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
+  const behindCount = Number(project?.remote?.behind || 0);
   const busy =
     actionState.staging ||
     actionState.committing ||
@@ -117,7 +118,7 @@ function setActionButtonsState() {
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
-  pullBtn.disabled = !isGitProject || busy;
+  pullBtn.disabled = !isGitProject || behindCount < 1 || busy;
   pushBtn.disabled = !isGitProject || busy;
   prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
@@ -1188,6 +1189,11 @@ async function createPrForActiveProject() {
 async function pullActiveProject() {
   const project = getActiveProject();
   if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
+  const behindCount = Number(project.remote?.behind || 0);
+  if (behindCount < 1) {
+    showToast("Already up to date.");
+    return;
+  }
 
   actionState.pulling = true;
   setActionButtonsState();
