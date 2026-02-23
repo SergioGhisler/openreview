@@ -109,6 +109,7 @@ function setActionButtonsState() {
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
   const behindCount = Number(project?.remote?.behind || 0);
+  const aheadCount = Number(project?.remote?.ahead || 0);
   const busy =
     actionState.staging ||
     actionState.committing ||
@@ -119,7 +120,7 @@ function setActionButtonsState() {
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
   pullBtn.disabled = !isGitProject || behindCount < 1 || busy;
-  pushBtn.disabled = !isGitProject || busy;
+  pushBtn.disabled = !isGitProject || aheadCount < 1 || busy;
   prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
 }
@@ -1108,6 +1109,11 @@ async function pushActiveProject() {
     actionState.creatingPr
   )
     return;
+  const aheadCount = Number(project.remote?.ahead || 0);
+  if (aheadCount < 1) {
+    showToast("Nothing to push.");
+    return;
+  }
 
   actionState.pushing = true;
   setActionButtonsState();
