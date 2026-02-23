@@ -14,6 +14,7 @@ const projectMetaEl = document.getElementById("project-meta");
 const refreshBtn = document.getElementById("refresh-btn");
 const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
+const projectSuggestionsEl = document.getElementById("project-suggestions");
 const toast = document.getElementById("toast");
 
 const menuBtn = document.getElementById("menu-btn");
@@ -22,6 +23,179 @@ const sidebarOverlay = document.getElementById("sidebar-overlay");
 const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
+
+const suggestionState = {
+  visible: false,
+  selectedIndex: -1
+};
+
+const searchState = {
+  filesystemMatches: [],
+  loading: false,
+  requestToken: 0,
+  debounceId: null
+};
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function getFilteredProjects(query) {
+  const term = query.trim().toLowerCase();
+  if (!term) return state.projects;
+
+  return state.projects.filter((project) => {
+    return project.path.toLowerCase().includes(term) || project.name.toLowerCase().includes(term);
+  });
+}
+
+function getProjectSuggestions(query) {
+  const deduped = new Map();
+
+  getFilteredProjects(query).forEach((project) => {
+    deduped.set(project.path, {
+      name: project.name,
+      path: project.path,
+      source: "recent"
+    });
+  });
+
+  searchState.filesystemMatches.forEach((project) => {
+    if (!deduped.has(project.path)) {
+      deduped.set(project.path, {
+        name: project.name,
+        path: project.path,
+        source: "filesystem"
+      });
+    }
+  });
+
+  return Array.from(deduped.values());
+}
+
+async function fetchFilesystemMatches(query, token) {
+  try {
+    const params = new URLSearchParams({ query });
+    const response = await fetch(`/api/projects/search?${params.toString()}`);
+    const payload = await response.json();
+
+    if (!response.ok || token !== searchState.requestToken) {
+      return;
+    }
+
+    searchState.filesystemMatches = payload.matches || [];
+  } catch {
+    if (token === searchState.requestToken) {
+      searchState.filesystemMatches = [];
+    }
+  } finally {
+    if (token === searchState.requestToken) {
+      searchState.loading = false;
+      if (suggestionState.visible) {
+        renderProjectSuggestions();
+      }
+    }
+  }
+}
+
+function scheduleFilesystemSearch() {
+  const query = projectPathInput.value.trim();
+  const token = ++searchState.requestToken;
+
+  if (searchState.debounceId) {
+    clearTimeout(searchState.debounceId);
+  }
+
+  searchState.loading = true;
+  renderProjectSuggestions();
+
+  searchState.debounceId = setTimeout(async () => {
+    await fetchFilesystemMatches(query, token);
+  }, 140);
+}
+
+function closeProjectSuggestions() {
+  suggestionState.visible = false;
+  suggestionState.selectedIndex = -1;
+  searchState.loading = false;
+  searchState.requestToken += 1;
+  if (searchState.debounceId) {
+    clearTimeout(searchState.debounceId);
+    searchState.debounceId = null;
+  }
+  projectSuggestionsEl.classList.remove("visible");
+  projectSuggestionsEl.innerHTML = "";
+}
+
+function renderProjectSuggestions() {
+  const matches = getProjectSuggestions(projectPathInput.value);
+
+  if (!suggestionState.visible) {
+    closeProjectSuggestions();
+    return;
+  }
+
+  if (suggestionState.selectedIndex >= matches.length) {
+    suggestionState.selectedIndex = matches.length - 1;
+  }
+
+  if (!matches.length && !searchState.loading) {
+    projectSuggestionsEl.innerHTML = '<div class="project-suggestions-empty">No git projects found.</div>';
+    projectSuggestionsEl.classList.add("visible");
+    return;
+  }
+
+  const listMarkup = matches
+    .map((project, index) => {
+      const selectedClass = index === suggestionState.selectedIndex ? "selected" : "";
+      const sourceLabel = project.source === "recent" ? "Recent" : "Git";
+      return `
+        <button
+          type="button"
+          class="project-suggestion-item ${selectedClass}"
+          data-index="${index}"
+          role="option"
+          aria-selected="${index === suggestionState.selectedIndex ? "true" : "false"}"
+        >
+          <span class="project-suggestion-top">
+            <strong>${escapeHtml(project.name)}</strong>
+            <span class="suggestion-source">${sourceLabel}</span>
+          </span>
+          <small>${escapeHtml(project.path)}</small>
+        </button>
+      `;
+    })
+    .join("");
+
+  const loadingMarkup = searchState.loading
+    ? '<div class="project-suggestions-loading">Searching git projects...</div>'
+    : "";
+
+  projectSuggestionsEl.innerHTML = `${listMarkup}${loadingMarkup}`;
+
+  projectSuggestionsEl.classList.add("visible");
+}
+
+function showProjectSuggestions() {
+  suggestionState.visible = true;
+  suggestionState.selectedIndex = -1;
+  scheduleFilesystemSearch();
+  renderProjectSuggestions();
+}
+
+async function chooseProjectSuggestion(index) {
+  const matches = getProjectSuggestions(projectPathInput.value);
+  const picked = matches[index];
+  if (!picked) return;
+
+  closeProjectSuggestions();
+  await openProject(picked.path);
+}
 
 function saveProjects() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
@@ -74,6 +248,10 @@ function renderProjects() {
       selectProject(path);
     });
   });
+
+  if (document.activeElement === projectPathInput && suggestionState.visible) {
+    renderProjectSuggestions();
+  }
 }
 
 function renderProjectDetails() {
@@ -228,7 +406,68 @@ async function openProject(projectPath) {
 
 openProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  closeProjectSuggestions();
   await openProject(projectPathInput.value);
+});
+
+projectPathInput.addEventListener("focus", () => {
+  showProjectSuggestions();
+});
+
+projectPathInput.addEventListener("input", () => {
+  showProjectSuggestions();
+});
+
+projectPathInput.addEventListener("keydown", async (event) => {
+  if (!suggestionState.visible) return;
+
+  const matches = getProjectSuggestions(projectPathInput.value);
+  if (!matches.length) return;
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    suggestionState.selectedIndex = (suggestionState.selectedIndex + 1) % matches.length;
+    renderProjectSuggestions();
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    suggestionState.selectedIndex =
+      suggestionState.selectedIndex <= 0 ? matches.length - 1 : suggestionState.selectedIndex - 1;
+    renderProjectSuggestions();
+    return;
+  }
+
+  if (event.key === "Escape") {
+    closeProjectSuggestions();
+    return;
+  }
+
+  if (event.key === "Enter" && suggestionState.selectedIndex >= 0) {
+    event.preventDefault();
+    await chooseProjectSuggestion(suggestionState.selectedIndex);
+  }
+});
+
+projectPathInput.addEventListener("blur", () => {
+  setTimeout(() => {
+    if (!projectSuggestionsEl.matches(":hover")) {
+      closeProjectSuggestions();
+    }
+  }, 120);
+});
+
+projectSuggestionsEl.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+
+projectSuggestionsEl.addEventListener("click", async (event) => {
+  const button = event.target.closest(".project-suggestion-item");
+  if (!button) return;
+
+  const index = Number(button.dataset.index);
+  await chooseProjectSuggestion(index);
 });
 
 refreshBtn.addEventListener("click", async () => {
