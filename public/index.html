@@ -63,11 +63,15 @@
                 <i data-lucide="chevrons-up-down"></i>
               </button>
               <div id="worktree-menu" class="worktree-menu" role="listbox" aria-label="Project worktrees"></div>
-              <p id="project-meta" class="text-truncate">Open a project to start</p>
+              <div class="project-meta-row">
+                <p id="project-meta" class="text-truncate">Open a project to start</p>
+                <span id="incoming-pill" class="incoming-pill hidden"></span>
+              </div>
             </div>
           </div>
           <div class="header-actions">
             <button id="commit-btn" class="secondary-btn" disabled>Commit</button>
+            <button id="pull-btn" class="secondary-btn" disabled>Pull</button>
             <button id="push-btn" class="primary-btn" disabled>Push</button>
             <button id="pr-btn" class="secondary-btn" disabled>Create PR</button>
             <button id="refresh-btn" class="icon-btn" aria-label="Refresh" disabled>

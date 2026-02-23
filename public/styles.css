@@ -388,6 +388,18 @@ input:focus {
   position: relative;
 }
 
+.project-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.project-meta-row #project-meta {
+  flex: 1;
+  min-width: 0;
+}
+
 .project-info h2 {
   font-size: 1rem;
   font-weight: 600;
@@ -546,6 +558,23 @@ input:focus {
   font-size: 0.75rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.incoming-pill {
+  flex-shrink: 0;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background-color: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  border-radius: var(--radius-full);
+  padding: 0.08rem 0.45rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+}
+
+.incoming-pill.hidden {
+  display: none;
 }
 
 /* Workspace */

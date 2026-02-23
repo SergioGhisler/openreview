@@ -155,26 +155,60 @@ async function getProjectSnapshot(projectPath) {
       path: projectPath,
       isGit: false,
       branch: null,
-      changedFiles: []
+      changedFiles: [],
+      remote: {
+        hasUpstream: false,
+        upstream: null,
+        ahead: 0,
+        behind: 0
+      }
     };
   }
 
-  const [branchResult, statusResult] = await Promise.all([
+  const [branchResult, statusResult, upstreamCheck] = await Promise.all([
     runCommand("git", ["branch", "--show-current"], { cwd: projectPath }).catch(() =>
       runCommand("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: projectPath }).catch(() => ({ stdout: "" }))
     ),
-    runCommand("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: projectPath })
+    runCommand("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: projectPath }),
+    runCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+      cwd: projectPath,
+      okExitCodes: [0, 128]
+    })
   ]);
 
   const lines = statusResult.stdout.split("\n").filter(Boolean);
   const changedFiles = lines.map(parseStatusLine);
+  const hasUpstream = upstreamCheck.code === 0;
+  const upstream = hasUpstream ? upstreamCheck.stdout.trim() : null;
+  let ahead = 0;
+  let behind = 0;
+
+  if (hasUpstream) {
+    try {
+      const aheadBehind = await runCommand("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], {
+        cwd: projectPath
+      });
+      const [behindRaw, aheadRaw] = aheadBehind.stdout.trim().split(/\s+/);
+      behind = Number.parseInt(behindRaw, 10) || 0;
+      ahead = Number.parseInt(aheadRaw, 10) || 0;
+    } catch {
+      ahead = 0;
+      behind = 0;
+    }
+  }
 
   return {
     name,
     path: projectPath,
     isGit: true,
     branch: branchResult.stdout.trim() || "no-commit-branch",
-    changedFiles
+    changedFiles,
+    remote: {
+      hasUpstream,
+      upstream,
+      ahead,
+      behind
+    }
   };
 }
 
@@ -515,6 +549,53 @@ app.post("/api/projects/push", async (req, res) => {
     res.json({ path: projectPath, branch, snapshot });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "Could not push changes." });
+  }
+});
+
+app.post("/api/projects/pull", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    await ensureGitRepository(projectPath);
+
+    const currentBranch = await runCommand("git", ["branch", "--show-current"], { cwd: projectPath });
+    const branch = currentBranch.stdout.trim();
+
+    if (!branch) {
+      res.status(400).json({ error: "Cannot pull while HEAD is detached." });
+      return;
+    }
+
+    const upstreamCheck = await runCommand(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { cwd: projectPath, okExitCodes: [0, 128] }
+    );
+
+    if (upstreamCheck.code !== 0) {
+      res.status(400).json({ error: "No upstream branch is configured. Set upstream before pulling." });
+      return;
+    }
+
+    await runCommand("git", ["pull", "--ff-only"], { cwd: projectPath });
+
+    const snapshot = await getProjectSnapshot(projectPath);
+    res.json({ path: projectPath, branch, snapshot });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}`.toLowerCase();
+    if (message.includes("not possible to fast-forward")) {
+      res.status(400).json({
+        error: "Cannot fast-forward pull. Rebase or merge this branch manually, then refresh."
+      });
+      return;
+    }
+    if (message.includes("local changes") || message.includes("would be overwritten")) {
+      res.status(400).json({
+        error: "Pull blocked by local changes. Commit or stash your work before pulling."
+      });
+      return;
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not pull changes." });
   }
 });
 

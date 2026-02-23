@@ -15,6 +15,7 @@ const projectSwitcherBtn = document.getElementById("project-switcher-btn");
 const worktreeMenuEl = document.getElementById("worktree-menu");
 const refreshBtn = document.getElementById("refresh-btn");
 const commitBtn = document.getElementById("commit-btn");
+const pullBtn = document.getElementById("pull-btn");
 const pushBtn = document.getElementById("push-btn");
 const prBtn = document.getElementById("pr-btn");
 const openProjectForm = document.getElementById("open-project-form");
@@ -29,6 +30,7 @@ const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
+const incomingPillEl = document.getElementById("incoming-pill");
 const prSectionEl = document.getElementById("pr-section");
 const prToggleBtn = document.getElementById("pr-toggle-btn");
 const prCountEl = document.getElementById("pr-count");
@@ -50,6 +52,7 @@ const searchState = {
 const actionState = {
   staging: false,
   committing: false,
+  pulling: false,
   pushing: false,
   creatingPr: false
 };
@@ -105,10 +108,17 @@ function setActionButtonsState() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
-  const busy = actionState.staging || actionState.committing || actionState.pushing || actionState.creatingPr;
+  const hasUpstream = Boolean(project && project.remote && project.remote.hasUpstream);
+  const busy =
+    actionState.staging ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing ||
+    actionState.creatingPr;
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
+  pullBtn.disabled = !isGitProject || !hasUpstream || busy;
   pushBtn.disabled = !isGitProject || busy;
   prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
@@ -727,11 +737,13 @@ function renderProjects() {
     .map((project) => {
       const isActive = project.path === state.activePath;
       const dirtyCount = project.changedFiles.length;
+      const incomingCount = Number(project.remote?.behind || 0);
+      const incomingText = incomingCount > 0 ? ` • ${incomingCount} incoming` : "";
       return `
         <button class="project-item ${isActive ? "active" : ""}" data-path="${project.path}">
           <strong>${project.name}</strong>
           <small>${project.path}</small>
-          <small>${project.isGit ? `${dirtyCount} changed file(s)` : "Not a git repository"}</small>
+          <small>${project.isGit ? `${dirtyCount} changed file(s)${incomingText}` : "Not a git repository"}</small>
         </button>
       `;
     })
@@ -755,6 +767,8 @@ function renderProjectDetails() {
   if (!project) {
     projectTitleEl.textContent = "No project";
     projectMetaEl.textContent = "Open a project to start";
+    incomingPillEl.textContent = "";
+    incomingPillEl.classList.add("hidden");
     projectSwitcherBtn.disabled = true;
     closeWorktreeMenu();
     filesListEl.className = "files-list empty";
@@ -774,6 +788,14 @@ function renderProjectDetails() {
   projectSwitcherBtn.disabled = !project.isGit;
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
+  const incomingCount = Number(project.remote?.behind || 0);
+  if (project.isGit && incomingCount > 0) {
+    incomingPillEl.textContent = `${incomingCount} incoming`;
+    incomingPillEl.classList.remove("hidden");
+  } else {
+    incomingPillEl.textContent = "";
+    incomingPillEl.classList.add("hidden");
+  }
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
 
   let statusText = "Select a file";
@@ -925,7 +947,15 @@ async function refreshActiveProject() {
 
 async function stageFile(file) {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+  if (
+    !project ||
+    !project.isGit ||
+    actionState.staging ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing
+  )
+    return;
   if (!file) return;
 
   actionState.staging = true;
@@ -955,7 +985,15 @@ async function stageFile(file) {
 
 async function unstageFile(file) {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+  if (
+    !project ||
+    !project.isGit ||
+    actionState.staging ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing
+  )
+    return;
   if (!file) return;
 
   actionState.staging = true;
@@ -985,7 +1023,15 @@ async function unstageFile(file) {
 
 async function stageAllActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+  if (
+    !project ||
+    !project.isGit ||
+    actionState.staging ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing
+  )
+    return;
 
   actionState.staging = true;
   setActionButtonsState();
@@ -1014,7 +1060,7 @@ async function stageAllActiveProject() {
 
 async function commitActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.committing || actionState.pushing) return;
+  if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
 
   const message = window.prompt("Commit message:");
   if (message === null) return;
@@ -1053,7 +1099,15 @@ async function commitActiveProject() {
 
 async function pushActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
+  if (
+    !project ||
+    !project.isGit ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing ||
+    actionState.creatingPr
+  )
+    return;
 
   actionState.pushing = true;
   setActionButtonsState();
@@ -1082,7 +1136,15 @@ async function pushActiveProject() {
 
 async function createPrForActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
+  if (
+    !project ||
+    !project.isGit ||
+    actionState.committing ||
+    actionState.pulling ||
+    actionState.pushing ||
+    actionState.creatingPr
+  )
+    return;
 
   const title = window.prompt("PR title:");
   if (title === null) return;
@@ -1120,6 +1182,35 @@ async function createPrForActiveProject() {
     showToast(error.message, true);
   } finally {
     actionState.creatingPr = false;
+    setActionButtonsState();
+  }
+}
+
+async function pullActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
+
+  actionState.pulling = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not pull changes.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Pulled ${payload.branch}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.pulling = false;
     setActionButtonsState();
   }
 }
@@ -1243,6 +1334,11 @@ commitBtn.addEventListener("click", async () => {
 
 pushBtn.addEventListener("click", async () => {
   await pushActiveProject();
+  await loadOpenPrsForActiveProject();
+});
+
+pullBtn.addEventListener("click", async () => {
+  await pullActiveProject();
   await loadOpenPrsForActiveProject();
 });
 
