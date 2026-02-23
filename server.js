@@ -518,6 +518,68 @@ app.post("/api/projects/push", async (req, res) => {
   }
 });
 
+app.post("/api/projects/pr", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const title = String(req.body?.title || "").trim();
+    const body = String(req.body?.body || "").trim();
+
+    if (!title) {
+      res.status(400).json({ error: "PR title is required." });
+      return;
+    }
+
+    await ensureGitRepository(projectPath);
+
+    const currentBranch = await runCommand("git", ["branch", "--show-current"], { cwd: projectPath });
+    const branch = currentBranch.stdout.trim();
+
+    if (!branch) {
+      res.status(400).json({ error: "Cannot create a PR while HEAD is detached." });
+      return;
+    }
+
+    const upstreamCheck = await runCommand(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { cwd: projectPath, okExitCodes: [0, 128] }
+    );
+
+    if (upstreamCheck.code !== 0) {
+      res.status(400).json({ error: "Push this branch first so it has an upstream before creating a PR." });
+      return;
+    }
+
+    const args = ["pr", "create", "--head", branch, "--title", title, "--body", body || " "];
+    const prCreate = await runCommand("gh", args, { cwd: projectPath });
+    const output = `${prCreate.stdout}\n${prCreate.stderr}`;
+    const urlMatch = output.match(/https?:\/\/[^\s]+/);
+
+    res.json({
+      path: projectPath,
+      branch,
+      url: urlMatch ? urlMatch[0] : null
+    });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}\n${error.stdout || ""}`;
+    if (message.toLowerCase().includes("already exists")) {
+      try {
+        const projectPath = await ensureDirectory(req.body?.path);
+        const existing = await runCommand("gh", ["pr", "view", "--json", "url", "--jq", ".url"], {
+          cwd: projectPath
+        });
+        res.json({ path: projectPath, url: existing.stdout.trim() });
+        return;
+      } catch {
+        res.status(409).json({ error: "A PR already exists for this branch." });
+        return;
+      }
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not create pull request." });
+  }
+});
+
 app.get("/api/projects/search", async (req, res) => {
   try {
     const query = typeof req.query.query === "string" ? req.query.query : "";

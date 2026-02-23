@@ -16,6 +16,7 @@ const worktreeMenuEl = document.getElementById("worktree-menu");
 const refreshBtn = document.getElementById("refresh-btn");
 const commitBtn = document.getElementById("commit-btn");
 const pushBtn = document.getElementById("push-btn");
+const prBtn = document.getElementById("pr-btn");
 const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
 const projectSuggestionsEl = document.getElementById("project-suggestions");
@@ -44,7 +45,8 @@ const searchState = {
 const actionState = {
   staging: false,
   committing: false,
-  pushing: false
+  pushing: false,
+  creatingPr: false
 };
 
 const worktreeState = {
@@ -89,11 +91,12 @@ function setActionButtonsState() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
-  const busy = actionState.staging || actionState.committing || actionState.pushing;
+  const busy = actionState.staging || actionState.committing || actionState.pushing || actionState.creatingPr;
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
   pushBtn.disabled = !isGitProject || busy;
+  prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
 }
 
@@ -805,7 +808,7 @@ async function commitActiveProject() {
 
 async function pushActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.committing || actionState.pushing) return;
+  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
 
   actionState.pushing = true;
   setActionButtonsState();
@@ -828,6 +831,50 @@ async function pushActiveProject() {
     showToast(error.message, true);
   } finally {
     actionState.pushing = false;
+    setActionButtonsState();
+  }
+}
+
+async function createPrForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
+
+  const defaultTitle = project.branch ? `[${project.branch}] ` : "";
+  const title = window.prompt("PR title:", defaultTitle);
+  if (title === null) return;
+
+  const cleanTitle = title.trim();
+  if (!cleanTitle) {
+    showToast("PR title is required.", true);
+    return;
+  }
+
+  const bodyInput = window.prompt("PR description (optional):", "");
+  if (bodyInput === null) return;
+  const body = bodyInput.trim();
+
+  actionState.creatingPr = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/pr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, title: cleanTitle, body })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not create pull request.");
+
+    if (payload.url) {
+      window.open(payload.url, "_blank", "noopener,noreferrer");
+      showToast("PR created and opened in browser.");
+    } else {
+      showToast("PR created.");
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.creatingPr = false;
     setActionButtonsState();
   }
 }
@@ -949,6 +996,10 @@ commitBtn.addEventListener("click", async () => {
 
 pushBtn.addEventListener("click", async () => {
   await pushActiveProject();
+});
+
+prBtn.addEventListener("click", async () => {
+  await createPrForActiveProject();
 });
 
 addAllBtn.addEventListener("click", async () => {
