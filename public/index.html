@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Review</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>Local Review</h1>
+          <p>Track your open projects</p>
+        </div>
+
+        <form id="open-project-form" class="open-project-form">
+          <label for="project-path">Project path</label>
+          <div class="path-row">
+            <input
+              id="project-path"
+              name="projectPath"
+              placeholder="/Users/you/dev/my-project"
+              autocomplete="off"
+              required
+            />
+            <button type="submit">Open</button>
+          </div>
+        </form>
+
+        <div id="project-list" class="project-list"></div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="main-header">
+          <div>
+            <h2 id="project-title">No project selected</h2>
+            <p id="project-meta">Open a project path to start reviewing local changes.</p>
+          </div>
+          <button id="refresh-btn" class="secondary-btn" disabled>Refresh</button>
+        </header>
+
+        <section class="workspace">
+          <article class="files-panel">
+            <h3>Changed files</h3>
+            <div id="files-list" class="files-list empty">No data yet.</div>
+          </article>
+
+          <article class="diff-panel">
+            <h3>Diff</h3>
+            <pre id="diff-viewer" class="diff-viewer">Pick a file to inspect its diff.</pre>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
