@@ -737,7 +737,7 @@ function renderProjects() {
       const isActive = project.path === state.activePath;
       const dirtyCount = project.changedFiles.length;
       const incomingCount = Number(project.remote?.behind || 0);
-      const incomingText = incomingCount > 0 ? ` • ${incomingCount} incoming` : "";
+      const incomingText = incomingCount > 0 ? ` • ↓ ${incomingCount}` : "";
       return `
         <button class="project-item ${isActive ? "active" : ""}" data-path="${project.path}">
           <strong>${project.name}</strong>
@@ -789,7 +789,7 @@ function renderProjectDetails() {
   projectMetaEl.textContent = project.path;
   const incomingCount = Number(project.remote?.behind || 0);
   if (project.isGit && incomingCount > 0) {
-    incomingPillEl.textContent = `${incomingCount} incoming`;
+    incomingPillEl.textContent = `↓ ${incomingCount}`;
     incomingPillEl.classList.remove("hidden");
   } else {
     incomingPillEl.textContent = "";
