@@ -45,6 +45,12 @@ const actionState = {
   pushing: false
 };
 
+const swipeConfig = {
+  trigger: 84,
+  maxOffset: 120,
+  deadZone: 10
+};
+
 function isFileStaged(file) {
   if (typeof file.staged === "boolean") return file.staged;
   const xy = String(file.xy || "  ");
@@ -80,6 +86,89 @@ function setActionButtonsState() {
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
   pushBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
+}
+
+function clamp(number, min, max) {
+  return Math.min(max, Math.max(min, number));
+}
+
+function setSwipeOffset(element, offset) {
+  element.style.setProperty("--swipe-offset", `${offset}px`);
+  const hasOffset = Math.abs(offset) > 0;
+  element.classList.toggle("swipe-revealed", hasOffset);
+  element.classList.toggle("swipe-stage-active", offset > swipeConfig.deadZone);
+  element.classList.toggle("swipe-unstage-active", offset < -swipeConfig.deadZone);
+}
+
+function resetSwipeOffset(element) {
+  element.classList.remove("swipe-dragging");
+  setSwipeOffset(element, 0);
+}
+
+function bindFileSwipe(fileElement, filePath, options) {
+  const { canStage, canUnstage } = options;
+  let pointerId = null;
+  let startX = 0;
+  let dragging = false;
+  let offset = 0;
+
+  fileElement.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    dragging = true;
+    offset = 0;
+    fileElement.classList.add("swipe-dragging");
+    fileElement.setPointerCapture(pointerId);
+  });
+
+  fileElement.addEventListener("pointermove", (event) => {
+    if (!dragging || pointerId !== event.pointerId) return;
+    const delta = event.clientX - startX;
+
+    if (delta > 0 && !canStage) {
+      offset = clamp(delta * 0.25, 0, 26);
+    } else if (delta < 0 && !canUnstage) {
+      offset = clamp(delta * 0.25, -26, 0);
+    } else {
+      offset = clamp(delta, -swipeConfig.maxOffset, swipeConfig.maxOffset);
+    }
+
+    setSwipeOffset(fileElement, offset);
+  });
+
+  fileElement.addEventListener("pointerup", async (event) => {
+    if (!dragging || pointerId !== event.pointerId) return;
+    dragging = false;
+    fileElement.releasePointerCapture(pointerId);
+    pointerId = null;
+
+    const shouldStage = offset >= swipeConfig.trigger && canStage;
+    const shouldUnstage = offset <= -swipeConfig.trigger && canUnstage;
+    const didSwipe = Math.abs(offset) > swipeConfig.deadZone;
+    fileElement.dataset.suppressClick = didSwipe ? "true" : "false";
+
+    if (shouldStage) {
+      resetSwipeOffset(fileElement);
+      await stageFile(filePath);
+      return;
+    }
+
+    if (shouldUnstage) {
+      resetSwipeOffset(fileElement);
+      await unstageFile(filePath);
+      return;
+    }
+
+    resetSwipeOffset(fileElement);
+  });
+
+  fileElement.addEventListener("pointercancel", () => {
+    dragging = false;
+    pointerId = null;
+    fileElement.dataset.suppressClick = "false";
+    resetSwipeOffset(fileElement);
+  });
 }
 
 function escapeHtml(value) {
@@ -355,35 +444,44 @@ function renderProjectDetails() {
       const staged = isFileStaged(item);
       const unstaged = isFileUnstaged(item) || item.xy === "??";
       const stageLabel = staged && unstaged ? "staged+unstaged" : staged ? "staged" : "unstaged";
-      const addButton = unstaged
-        ? `<button type="button" class="file-action-btn" data-add-index="${index}">Add</button>`
-        : "";
       return `
-        <div class="file-item ${isActive ? "active" : ""}" data-file-index="${index}" role="button" tabindex="0">
-          <span class="path">${item.file}</span>
-          <span class="file-item-right">
-            ${addButton}
-            <span class="status ${statusClass}">${item.status}</span>
-            <span class="stage-pill">${stageLabel}</span>
-          </span>
+        <div
+          class="file-item ${isActive ? "active" : ""} ${staged ? "can-unstage" : ""} ${unstaged ? "can-stage" : ""}"
+          data-file-index="${index}"
+          role="button"
+          tabindex="0"
+        >
+          <div class="file-item-swipe-bg" aria-hidden="true">
+            <span class="swipe-hint swipe-hint-stage">Stage</span>
+            <span class="swipe-hint swipe-hint-unstage">Unstage</span>
+          </div>
+          <div class="file-item-content">
+            <span class="path">${item.file}</span>
+            <span class="file-item-right">
+              <span class="status ${statusClass}">${item.status}</span>
+              <span class="stage-pill">${stageLabel}</span>
+            </span>
+          </div>
         </div>
       `;
     })
     .join("");
 
-  document.querySelectorAll(".file-action-btn").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const index = Number(button.dataset.addIndex);
-      const item = getActiveProject()?.changedFiles?.[index];
-      if (!item) return;
-      await stageFile(item.file);
-    });
-  });
-
   document.querySelectorAll(".file-item").forEach((button) => {
+    const index = Number(button.dataset.fileIndex);
+    const item = getActiveProject()?.changedFiles?.[index];
+    const canStage = Boolean(item && (isFileUnstaged(item) || item.xy === "??"));
+    const canUnstage = Boolean(item && isFileStaged(item));
+
+    if (item) {
+      bindFileSwipe(button, item.file, { canStage, canUnstage });
+    }
+
     button.addEventListener("click", async () => {
-      const index = Number(button.dataset.fileIndex);
+      if (button.dataset.suppressClick === "true") {
+        button.dataset.suppressClick = "false";
+        return;
+      }
       const file = getActiveProject()?.changedFiles?.[index]?.file;
       if (!file) return;
       document.body.classList.add("viewing-diff");
@@ -485,6 +583,36 @@ async function stageFile(file) {
     renderProjects();
     renderProjectDetails();
     showToast(`Added ${file}`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.staging = false;
+    setActionButtonsState();
+  }
+}
+
+async function unstageFile(file) {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.staging || actionState.committing || actionState.pushing) return;
+  if (!file) return;
+
+  actionState.staging = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/unstage-file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, file })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not unstage file.");
+
+    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    saveProjects();
+    renderProjects();
+    renderProjectDetails();
+    showToast(`Unstaged ${file}`);
   } catch (error) {
     showToast(error.message, true);
   } finally {

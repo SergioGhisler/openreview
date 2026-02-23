@@ -397,6 +397,41 @@ app.post("/api/projects/stage-file", async (req, res) => {
   }
 });
 
+app.post("/api/projects/unstage-file", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const file = String(req.body?.file || "").trim();
+
+    if (!file) {
+      res.status(400).json({ error: "File path is required." });
+      return;
+    }
+
+    await ensureGitRepository(projectPath);
+
+    try {
+      await runCommand("git", ["restore", "--staged", "--", file], { cwd: projectPath });
+    } catch (error) {
+      const message = `${error.message || ""}\n${error.stderr || ""}`;
+      const unsupportedRestore =
+        message.includes("unknown option") ||
+        message.includes("is not a git command") ||
+        message.includes("unknown switch `s`");
+
+      if (!unsupportedRestore) {
+        throw error;
+      }
+
+      await runCommand("git", ["reset", "HEAD", "--", file], { cwd: projectPath });
+    }
+
+    const snapshot = await getProjectSnapshot(projectPath);
+    res.json({ path: projectPath, file, snapshot });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not unstage file." });
+  }
+});
+
 app.post("/api/projects/push", async (req, res) => {
   try {
     const projectPath = await ensureDirectory(req.body?.path);
