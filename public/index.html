@@ -97,6 +97,21 @@
             <div class="panel-content">
               <div id="files-list" class="files-list empty">No data yet.</div>
             </div>
+            <div id="outgoing-section" class="outgoing-section collapsed">
+              <div class="panel-header outgoing-panel-header">
+                <button id="outgoing-toggle-btn" class="outgoing-toggle-btn" type="button" aria-expanded="false" aria-controls="outgoing-panel-content">
+                  <h3>Outgoing Commits</h3>
+                  <span id="outgoing-count" class="badge">0</span>
+                  <i class="outgoing-toggle-icon" data-lucide="chevron-down"></i>
+                </button>
+                <button id="refresh-outgoing-btn" class="icon-btn compact-icon-btn" aria-label="Refresh outgoing commits">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+              </div>
+              <div id="outgoing-panel-content" class="panel-content outgoing-panel-content">
+                <div id="outgoing-list" class="outgoing-list empty">Select a git project to load outgoing commits.</div>
+              </div>
+            </div>
             <div id="pr-section" class="pr-section collapsed">
               <div class="panel-header pr-panel-header">
                 <button id="pr-toggle-btn" class="pr-toggle-btn" type="button" aria-expanded="false" aria-controls="pr-panel-content">

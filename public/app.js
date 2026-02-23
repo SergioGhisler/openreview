@@ -31,6 +31,11 @@ const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
 const incomingPillEl = document.getElementById("incoming-pill");
+const outgoingSectionEl = document.getElementById("outgoing-section");
+const outgoingToggleBtn = document.getElementById("outgoing-toggle-btn");
+const outgoingCountEl = document.getElementById("outgoing-count");
+const outgoingListEl = document.getElementById("outgoing-list");
+const refreshOutgoingBtn = document.getElementById("refresh-outgoing-btn");
 const prSectionEl = document.getElementById("pr-section");
 const prToggleBtn = document.getElementById("pr-toggle-btn");
 const prCountEl = document.getElementById("pr-count");
@@ -67,6 +72,13 @@ const worktreeState = {
 };
 
 const prState = {
+  loading: false,
+  items: [],
+  error: null,
+  expanded: false
+};
+
+const outgoingState = {
   loading: false,
   items: [],
   error: null,
@@ -110,6 +122,7 @@ function setActionButtonsState() {
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
   const behindCount = Number(project?.remote?.behind || 0);
   const aheadCount = Number(project?.remote?.ahead || 0);
+  const hasUpstream = Boolean(project?.remote?.hasUpstream);
   const busy =
     actionState.staging ||
     actionState.committing ||
@@ -120,7 +133,7 @@ function setActionButtonsState() {
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
   pullBtn.disabled = !isGitProject || behindCount < 1 || busy;
-  pushBtn.disabled = !isGitProject || aheadCount < 1 || busy;
+  pushBtn.disabled = !isGitProject || (hasUpstream && aheadCount < 1) || busy;
   prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
 }
@@ -313,6 +326,91 @@ function setPrPanelExpanded(expanded) {
 
 function togglePrPanel() {
   setPrPanelExpanded(!prState.expanded);
+}
+
+function setOutgoingPanelExpanded(expanded) {
+  outgoingState.expanded = expanded;
+  outgoingSectionEl?.classList.toggle("expanded", expanded);
+  outgoingSectionEl?.classList.toggle("collapsed", !expanded);
+  outgoingToggleBtn?.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function toggleOutgoingPanel() {
+  setOutgoingPanelExpanded(!outgoingState.expanded);
+}
+
+function renderOutgoingList() {
+  const project = getActiveProject();
+  const isGitProject = Boolean(project && project.isGit);
+  outgoingCountEl.textContent = String(outgoingState.items.length);
+
+  refreshOutgoingBtn.disabled = !isGitProject || outgoingState.loading;
+
+  if (!isGitProject) {
+    outgoingListEl.className = "outgoing-list empty";
+    outgoingListEl.textContent = "Select a git project to load outgoing commits.";
+    return;
+  }
+
+  if (outgoingState.loading) {
+    outgoingListEl.className = "outgoing-list empty";
+    outgoingListEl.textContent = "Loading outgoing commits...";
+    return;
+  }
+
+  if (outgoingState.error) {
+    outgoingListEl.className = "outgoing-list empty";
+    outgoingListEl.textContent = outgoingState.error;
+    return;
+  }
+
+  if (!outgoingState.items.length) {
+    outgoingListEl.className = "outgoing-list empty";
+    outgoingListEl.textContent = "No outgoing commits for this project.";
+    return;
+  }
+
+  outgoingListEl.className = "outgoing-list";
+  outgoingListEl.innerHTML = outgoingState.items
+    .map((item) => {
+      const updated = formatRelativeDate(item.authoredAt);
+      return `
+        <div class="outgoing-item">
+          <span class="outgoing-item-title">${escapeHtml(item.subject || "Untitled commit")}</span>
+          <span class="outgoing-item-meta">${escapeHtml(item.shortHash || "")}${updated ? ` • ${escapeHtml(updated)}` : ""}</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function loadOutgoingCommitsForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    outgoingState.items = [];
+    outgoingState.error = null;
+    renderOutgoingList();
+    return;
+  }
+
+  outgoingState.loading = true;
+  outgoingState.error = null;
+  renderOutgoingList();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/outgoing-commits?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load outgoing commits.");
+
+    outgoingState.items = payload.commits || [];
+  } catch (error) {
+    outgoingState.items = [];
+    outgoingState.error = error.message;
+  } finally {
+    outgoingState.loading = false;
+    renderOutgoingList();
+  }
 }
 
 function renderPrList() {
@@ -781,6 +879,10 @@ function renderProjectDetails() {
     document.body.classList.remove("viewing-diff");
     prState.items = [];
     prState.error = null;
+    outgoingState.items = [];
+    outgoingState.error = null;
+    outgoingSectionEl?.classList.add("hidden");
+    renderOutgoingList();
     renderPrList();
     return;
   }
@@ -790,12 +892,18 @@ function renderProjectDetails() {
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
   const incomingCount = Number(project.remote?.behind || 0);
+  const outgoingCount = Number(project.remote?.ahead || 0);
   if (project.isGit && incomingCount > 0) {
     incomingPillEl.textContent = `↓ ${incomingCount}`;
     incomingPillEl.classList.remove("hidden");
   } else {
     incomingPillEl.textContent = "";
     incomingPillEl.classList.add("hidden");
+  }
+  if (project.isGit && outgoingCount > 0) {
+    outgoingSectionEl?.classList.remove("hidden");
+  } else {
+    outgoingSectionEl?.classList.add("hidden");
   }
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
 
@@ -810,6 +918,7 @@ function renderProjectDetails() {
     filesListEl.textContent = "This folder is not a git repository.";
     setDiffMessage("No diff available.");
     setActionButtonsState();
+    outgoingSectionEl?.classList.add("hidden");
     return;
   }
 
@@ -1090,6 +1199,7 @@ async function commitActiveProject() {
     renderProjects();
     renderProjectDetails();
     showToast(`Committed ${payload.hash}`);
+    void loadOutgoingCommitsForActiveProject();
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -1110,7 +1220,8 @@ async function pushActiveProject() {
   )
     return;
   const aheadCount = Number(project.remote?.ahead || 0);
-  if (aheadCount < 1) {
+  const hasUpstream = Boolean(project.remote?.hasUpstream);
+  if (hasUpstream && aheadCount < 1) {
     showToast("Nothing to push.");
     return;
   }
@@ -1132,6 +1243,7 @@ async function pushActiveProject() {
     renderProjects();
     renderProjectDetails();
     showToast(`Pushed ${payload.branch}`);
+    void loadOutgoingCommitsForActiveProject();
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -1218,6 +1330,7 @@ async function pullActiveProject() {
     renderProjects();
     renderProjectDetails();
     showToast(`Pulled ${payload.branch}`);
+    void loadOutgoingCommitsForActiveProject();
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -1236,6 +1349,7 @@ function selectProject(projectPath) {
   renderProjects();
   renderProjectDetails();
   void refreshActiveProject();
+  void loadOutgoingCommitsForActiveProject();
   void loadOpenPrsForActiveProject();
 }
 
@@ -1337,6 +1451,7 @@ projectSuggestionsEl.addEventListener("click", async (event) => {
 
 refreshBtn.addEventListener("click", async () => {
   await refreshActiveProject();
+  await loadOutgoingCommitsForActiveProject();
   await loadOpenPrsForActiveProject();
 });
 
@@ -1356,6 +1471,17 @@ pullBtn.addEventListener("click", async () => {
 
 prBtn.addEventListener("click", async () => {
   await createPrForActiveProject();
+});
+
+refreshOutgoingBtn?.addEventListener("click", async () => {
+  await loadOutgoingCommitsForActiveProject();
+});
+
+outgoingToggleBtn?.addEventListener("click", async () => {
+  toggleOutgoingPanel();
+  if (outgoingState.expanded && !outgoingState.loading && !outgoingState.items.length && !outgoingState.error) {
+    await loadOutgoingCommitsForActiveProject();
+  }
 });
 
 refreshPrsBtn?.addEventListener("click", async () => {
@@ -1425,7 +1551,9 @@ function init() {
   loadProjects();
   renderProjects();
   setActionButtonsState();
+  setOutgoingPanelExpanded(false);
   setPrPanelExpanded(false);
+  renderOutgoingList();
   renderPrList();
 
   if (state.projects.length) {

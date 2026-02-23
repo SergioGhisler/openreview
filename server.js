@@ -722,6 +722,74 @@ app.get("/api/projects/prs", async (req, res) => {
   }
 });
 
+app.get("/api/projects/outgoing-commits", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    await ensureGitRepository(projectPath);
+    await syncRemoteRefs(projectPath);
+
+    const branchResult = await runCommand("git", ["branch", "--show-current"], { cwd: projectPath });
+    const branch = branchResult.stdout.trim();
+
+    if (!branch) {
+      res.json({ path: projectPath, commits: [] });
+      return;
+    }
+
+    const upstreamCheck = await runCommand(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { cwd: projectPath, okExitCodes: [0, 128] }
+    );
+
+    let range = null;
+    if (upstreamCheck.code === 0) {
+      const upstream = upstreamCheck.stdout.trim();
+      if (upstream) {
+        range = `${upstream}..HEAD`;
+      }
+    } else {
+      const remoteBranchRef = `refs/remotes/origin/${branch}`;
+      const remoteBranchExists = await runCommand("git", ["show-ref", "--verify", "--quiet", remoteBranchRef], {
+        cwd: projectPath,
+        okExitCodes: [0, 1, 128]
+      });
+      if (remoteBranchExists.code === 0) {
+        range = `origin/${branch}..HEAD`;
+      }
+    }
+
+    if (!range) {
+      res.json({ path: projectPath, commits: [] });
+      return;
+    }
+
+    const logResult = await runCommand(
+      "git",
+      ["log", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%aI", "-n", "30", range],
+      { cwd: projectPath }
+    );
+
+    const commits = String(logResult.stdout || "")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [hash, shortHash, subject, author, authoredAt] = line.split("\x1f");
+        return {
+          hash: hash || "",
+          shortHash: shortHash || "",
+          subject: subject || "",
+          author: author || "",
+          authoredAt: authoredAt || ""
+        };
+      });
+
+    res.json({ path: projectPath, commits });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load outgoing commits." });
+  }
+});
+
 app.get("/api/projects/search", async (req, res) => {
   try {
     const query = typeof req.query.query === "string" ? req.query.query : "";
