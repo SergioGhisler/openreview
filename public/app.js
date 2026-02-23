@@ -11,9 +11,12 @@ const filesListEl = document.getElementById("files-list");
 const diffViewerEl = document.getElementById("diff-viewer");
 const projectTitleEl = document.getElementById("project-title");
 const projectMetaEl = document.getElementById("project-meta");
+const projectSwitcherBtn = document.getElementById("project-switcher-btn");
+const worktreeMenuEl = document.getElementById("worktree-menu");
 const refreshBtn = document.getElementById("refresh-btn");
 const commitBtn = document.getElementById("commit-btn");
 const pushBtn = document.getElementById("push-btn");
+const prBtn = document.getElementById("pr-btn");
 const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
 const projectSuggestionsEl = document.getElementById("project-suggestions");
@@ -26,6 +29,11 @@ const backToFilesBtn = document.getElementById("back-to-files-btn");
 const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
+const prSectionEl = document.getElementById("pr-section");
+const prToggleBtn = document.getElementById("pr-toggle-btn");
+const prCountEl = document.getElementById("pr-count");
+const prListEl = document.getElementById("pr-list");
+const refreshPrsBtn = document.getElementById("refresh-prs-btn");
 
 const suggestionState = {
   visible: false,
@@ -42,7 +50,22 @@ const searchState = {
 const actionState = {
   staging: false,
   committing: false,
-  pushing: false
+  pushing: false,
+  creatingPr: false
+};
+
+const worktreeState = {
+  visible: false,
+  loading: false,
+  switching: false,
+  items: []
+};
+
+const prState = {
+  loading: false,
+  items: [],
+  error: null,
+  expanded: false
 };
 
 const swipeConfig = {
@@ -80,11 +103,12 @@ function setActionButtonsState() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
   const { stagedCount, unstagedCount } = getProjectStageStats(project);
-  const busy = actionState.staging || actionState.committing || actionState.pushing;
+  const busy = actionState.staging || actionState.committing || actionState.pushing || actionState.creatingPr;
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
   pushBtn.disabled = !isGitProject || busy;
+  prBtn.disabled = !isGitProject || busy;
   addAllBtn.disabled = !isGitProject || unstagedCount === 0 || busy;
 }
 
@@ -182,6 +206,282 @@ function escapeHtml(value) {
 
 function setDiffMessage(msg) {
   diffViewerEl.innerHTML = `<span class="diff-line diff-context">${escapeHtml(msg)}</span>`;
+}
+
+function formatRelativeDate(isoValue) {
+  if (!isoValue) return "";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return "updated now";
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `updated ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `updated ${days}d ago`;
+
+  return `updated ${date.toLocaleDateString()}`;
+}
+
+function toGitHubAppUrl(webUrl) {
+  try {
+    const parsed = new URL(webUrl);
+    if (!parsed.hostname.endsWith("github.com")) return null;
+    return `github://${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function openPrInBrowser(url) {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function openPrPreferred(url) {
+  const appUrl = toGitHubAppUrl(url);
+  if (!appUrl) {
+    openPrInBrowser(url);
+    return;
+  }
+
+  let cancelled = false;
+  let appSwitchDetected = false;
+  let fallbackId = null;
+
+  const cleanup = () => {
+    document.removeEventListener("visibilitychange", cancelOnHidden);
+    window.removeEventListener("pagehide", cancelOnHidden);
+    window.removeEventListener("blur", cancelOnHidden);
+  };
+
+  const cancelFallback = () => {
+    cancelled = true;
+    if (fallbackId) {
+      clearTimeout(fallbackId);
+      fallbackId = null;
+    }
+    cleanup();
+  };
+
+  const cancelOnHidden = (event) => {
+    if (event?.type === "blur" || event?.type === "pagehide") {
+      appSwitchDetected = true;
+      cancelFallback();
+      return;
+    }
+
+    if (document.visibilityState === "visible") return;
+
+    appSwitchDetected = true;
+    cancelFallback();
+  };
+
+  fallbackId = setTimeout(() => {
+    if (cancelled || appSwitchDetected) return;
+    openPrInBrowser(url);
+    cancelFallback();
+  }, 1200);
+
+  document.addEventListener("visibilitychange", cancelOnHidden);
+  window.addEventListener("pagehide", cancelOnHidden);
+  window.addEventListener("blur", cancelOnHidden);
+
+  window.location.href = appUrl;
+}
+
+function setPrPanelExpanded(expanded) {
+  prState.expanded = expanded;
+  prSectionEl?.classList.toggle("expanded", expanded);
+  prSectionEl?.classList.toggle("collapsed", !expanded);
+  prToggleBtn?.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function togglePrPanel() {
+  setPrPanelExpanded(!prState.expanded);
+}
+
+function renderPrList() {
+  const project = getActiveProject();
+  const isGitProject = Boolean(project && project.isGit);
+  prCountEl.textContent = String(prState.items.length);
+
+  refreshPrsBtn.disabled = !isGitProject || prState.loading;
+
+  if (!isGitProject) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "Select a git project to load pull requests.";
+    return;
+  }
+
+  if (prState.loading) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "Loading open pull requests...";
+    return;
+  }
+
+  if (prState.error) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = prState.error;
+    return;
+  }
+
+  if (!prState.items.length) {
+    prListEl.className = "pr-list empty";
+    prListEl.textContent = "No open pull requests for this project.";
+    return;
+  }
+
+  prListEl.className = "pr-list";
+  prListEl.innerHTML = prState.items
+    .map((item, index) => {
+      const author = item.author && item.author.login ? `@${item.author.login}` : "unknown";
+      const updated = formatRelativeDate(item.updatedAt);
+      const branchMeta = `${item.headRefName || "?"} -> ${item.baseRefName || "?"}`;
+      return `
+        <div class="pr-item" data-pr-index="${index}" role="button" tabindex="0" aria-label="Open pull request ${escapeHtml(item.title || "Untitled")}">
+          <div class="pr-item-top">
+            <span class="pr-item-title">${escapeHtml(item.title || "Untitled")}</span>
+            <span class="pr-item-number">#${escapeHtml(item.number || "")}</span>
+          </div>
+          <div class="pr-item-meta">${escapeHtml(branchMeta)}</div>
+          <div class="pr-item-meta">${escapeHtml(author)} ${escapeHtml(updated)}</div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function loadOpenPrsForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    prState.items = [];
+    prState.error = null;
+    renderPrList();
+    return;
+  }
+
+  prState.loading = true;
+  prState.error = null;
+  renderPrList();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/prs?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load pull requests.");
+
+    prState.items = payload.prs || [];
+  } catch (error) {
+    prState.items = [];
+    prState.error = error.message;
+  } finally {
+    prState.loading = false;
+    renderPrList();
+  }
+}
+
+function closeWorktreeMenu() {
+  worktreeState.visible = false;
+  worktreeMenuEl.classList.remove("visible");
+  projectSwitcherBtn?.setAttribute("aria-expanded", "false");
+}
+
+function renderWorktreeMenu() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || !worktreeState.visible) {
+    worktreeMenuEl.innerHTML = "";
+    closeWorktreeMenu();
+    return;
+  }
+
+  if (worktreeState.loading) {
+    worktreeMenuEl.innerHTML = '<div class="worktree-menu-empty">Loading worktrees...</div>';
+    worktreeMenuEl.classList.add("visible");
+    return;
+  }
+
+  if (!worktreeState.items.length) {
+    worktreeMenuEl.innerHTML = '<div class="worktree-menu-empty">No worktrees found.</div>';
+    worktreeMenuEl.classList.add("visible");
+    return;
+  }
+
+  worktreeMenuEl.innerHTML = worktreeState.items
+    .map((item, index) => {
+      return `
+        <button type="button" class="worktree-item ${item.current ? "active" : ""}" data-worktree-index="${index}" role="option" aria-selected="${item.current ? "true" : "false"}">
+          <strong>${escapeHtml(item.name)}</strong>
+          <small>${escapeHtml(item.path)}</small>
+          <span class="branch-pill">${escapeHtml(item.branch || "unknown")}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  worktreeMenuEl.classList.add("visible");
+}
+
+async function loadWorktreesForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    worktreeState.items = [];
+    return;
+  }
+
+  worktreeState.loading = true;
+  renderWorktreeMenu();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/worktrees?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load worktrees.");
+    worktreeState.items = payload.worktrees || [];
+  } catch (error) {
+    worktreeState.items = [];
+    showToast(error.message, true);
+  } finally {
+    worktreeState.loading = false;
+    renderWorktreeMenu();
+  }
+}
+
+async function toggleWorktreeMenu() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || worktreeState.switching) return;
+
+  if (worktreeState.visible) {
+    closeWorktreeMenu();
+    return;
+  }
+
+  worktreeState.visible = true;
+  projectSwitcherBtn?.setAttribute("aria-expanded", "true");
+  renderWorktreeMenu();
+  await loadWorktreesForActiveProject();
+}
+
+async function switchToWorktree(index) {
+  if (worktreeState.switching) return;
+  const picked = worktreeState.items[index];
+  if (!picked || !picked.path) return;
+
+  const existing = state.projects.find((project) => project.path === picked.path);
+  worktreeState.switching = true;
+
+  try {
+    if (existing) {
+      selectProject(picked.path);
+      await refreshActiveProject();
+    } else {
+      await openProject(picked.path);
+    }
+    closeWorktreeMenu();
+  } finally {
+    worktreeState.switching = false;
+  }
 }
 
 function getFilteredProjects(query) {
@@ -399,6 +699,8 @@ function renderProjectDetails() {
   if (!project) {
     projectTitleEl.textContent = "No project";
     projectMetaEl.textContent = "Open a project to start";
+    projectSwitcherBtn.disabled = true;
+    closeWorktreeMenu();
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "No data yet.";
     setDiffMessage("Pick a file to inspect its diff.");
@@ -406,10 +708,14 @@ function renderProjectDetails() {
     filesCountEl.textContent = "0";
     diffFileNameEl.textContent = "Select a file";
     document.body.classList.remove("viewing-diff");
+    prState.items = [];
+    prState.error = null;
+    renderPrList();
     return;
   }
 
   setActionButtonsState();
+  projectSwitcherBtn.disabled = !project.isGit;
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
@@ -691,7 +997,7 @@ async function commitActiveProject() {
 
 async function pushActiveProject() {
   const project = getActiveProject();
-  if (!project || !project.isGit || actionState.committing || actionState.pushing) return;
+  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
 
   actionState.pushing = true;
   setActionButtonsState();
@@ -718,14 +1024,60 @@ async function pushActiveProject() {
   }
 }
 
+async function createPrForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pushing || actionState.creatingPr) return;
+
+  const title = window.prompt("PR title:");
+  if (title === null) return;
+
+  const cleanTitle = title.trim();
+  if (!cleanTitle) {
+    showToast("PR title is required.", true);
+    return;
+  }
+
+  const bodyInput = window.prompt("PR description (optional):", "");
+  if (bodyInput === null) return;
+  const body = bodyInput.trim();
+
+  actionState.creatingPr = true;
+  setActionButtonsState();
+
+  try {
+    const response = await fetch("/api/projects/pr", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, title: cleanTitle, body })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not create pull request.");
+
+    if (payload.url) {
+      openPrPreferred(payload.url);
+      showToast("PR created and opened.");
+    } else {
+      showToast("PR created.");
+    }
+    void loadOpenPrsForActiveProject();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    actionState.creatingPr = false;
+    setActionButtonsState();
+  }
+}
+
 function selectProject(projectPath) {
   state.activePath = projectPath;
   state.selectedFile = null;
+  closeWorktreeMenu();
   setDiffMessage("Pick a file to inspect its diff.");
   document.body.classList.remove("show-sidebar");
   document.body.classList.remove("viewing-diff");
   renderProjects();
   renderProjectDetails();
+  void loadOpenPrsForActiveProject();
 }
 
 async function openProject(projectPath) {
@@ -826,6 +1178,7 @@ projectSuggestionsEl.addEventListener("click", async (event) => {
 
 refreshBtn.addEventListener("click", async () => {
   await refreshActiveProject();
+  await loadOpenPrsForActiveProject();
 });
 
 commitBtn.addEventListener("click", async () => {
@@ -834,16 +1187,75 @@ commitBtn.addEventListener("click", async () => {
 
 pushBtn.addEventListener("click", async () => {
   await pushActiveProject();
+  await loadOpenPrsForActiveProject();
+});
+
+prBtn.addEventListener("click", async () => {
+  await createPrForActiveProject();
+});
+
+refreshPrsBtn?.addEventListener("click", async () => {
+  await loadOpenPrsForActiveProject();
+});
+
+prToggleBtn?.addEventListener("click", async () => {
+  togglePrPanel();
+  if (prState.expanded && !prState.loading && !prState.items.length && !prState.error) {
+    await loadOpenPrsForActiveProject();
+  }
+});
+
+prListEl?.addEventListener("click", (event) => {
+  const card = event.target.closest(".pr-item[data-pr-index]");
+  if (!card) return;
+
+  const index = Number(card.dataset.prIndex);
+  const item = prState.items[index];
+  if (!item || !item.url) return;
+
+  openPrPreferred(item.url);
+});
+
+prListEl?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const card = event.target.closest(".pr-item[data-pr-index]");
+  if (!card) return;
+
+  event.preventDefault();
+  const index = Number(card.dataset.prIndex);
+  const item = prState.items[index];
+  if (!item || !item.url) return;
+
+  openPrPreferred(item.url);
 });
 
 addAllBtn.addEventListener("click", async () => {
   await stageAllActiveProject();
 });
 
+projectSwitcherBtn?.addEventListener("click", async () => {
+  await toggleWorktreeMenu();
+});
+
+worktreeMenuEl?.addEventListener("click", async (event) => {
+  const button = event.target.closest(".worktree-item");
+  if (!button) return;
+  const index = Number(button.dataset.worktreeIndex);
+  await switchToWorktree(index);
+});
+
+document.addEventListener("click", (event) => {
+  if (!worktreeState.visible) return;
+  if (projectSwitcherBtn?.contains(event.target) || worktreeMenuEl?.contains(event.target)) return;
+  closeWorktreeMenu();
+});
+
 function init() {
   loadProjects();
   renderProjects();
   setActionButtonsState();
+  setPrPanelExpanded(false);
+  renderPrList();
 
   if (state.projects.length) {
     selectProject(state.projects[0].path);

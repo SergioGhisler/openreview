@@ -91,6 +91,60 @@ function parseStatusLine(line) {
   return { file, xy, status, staged, unstaged };
 }
 
+function parseWorktreeList(stdout) {
+  const lines = String(stdout || "").split("\n");
+  const worktrees = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (!current || !current.path) return;
+    const branchName = current.branchRef
+      ? current.branchRef.replace("refs/heads/", "")
+      : current.detached
+        ? "detached"
+        : "unknown";
+
+    worktrees.push({
+      path: current.path,
+      branch: branchName,
+      head: current.head || "",
+      detached: Boolean(current.detached),
+      bare: Boolean(current.bare)
+    });
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      pushCurrent();
+      current = null;
+      continue;
+    }
+
+    if (line.startsWith("worktree ")) {
+      pushCurrent();
+      current = { path: line.slice("worktree ".length) };
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (line.startsWith("HEAD ")) {
+      current.head = line.slice("HEAD ".length);
+    } else if (line.startsWith("branch ")) {
+      current.branchRef = line.slice("branch ".length);
+    } else if (line === "detached") {
+      current.detached = true;
+    } else if (line === "bare") {
+      current.bare = true;
+    }
+  }
+
+  pushCurrent();
+  return worktrees;
+}
+
 async function getProjectSnapshot(projectPath) {
   const name = path.basename(projectPath);
   const git = await isGitRepository(projectPath);
@@ -464,6 +518,113 @@ app.post("/api/projects/push", async (req, res) => {
   }
 });
 
+app.post("/api/projects/pr", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const title = String(req.body?.title || "").trim();
+    const body = String(req.body?.body || "").trim();
+
+    if (!title) {
+      res.status(400).json({ error: "PR title is required." });
+      return;
+    }
+
+    await ensureGitRepository(projectPath);
+
+    const currentBranch = await runCommand("git", ["branch", "--show-current"], { cwd: projectPath });
+    const branch = currentBranch.stdout.trim();
+
+    if (!branch) {
+      res.status(400).json({ error: "Cannot create a PR while HEAD is detached." });
+      return;
+    }
+
+    const upstreamCheck = await runCommand(
+      "git",
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { cwd: projectPath, okExitCodes: [0, 128] }
+    );
+
+    if (upstreamCheck.code !== 0) {
+      res.status(400).json({ error: "Push this branch first so it has an upstream before creating a PR." });
+      return;
+    }
+
+    const args = ["pr", "create", "--head", branch, "--title", title, "--body", body || " "];
+    const prCreate = await runCommand("gh", args, { cwd: projectPath });
+    const output = `${prCreate.stdout}\n${prCreate.stderr}`;
+    const urlMatch = output.match(/https?:\/\/[^\s]+/);
+
+    res.json({
+      path: projectPath,
+      branch,
+      url: urlMatch ? urlMatch[0] : null
+    });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}\n${error.stdout || ""}`;
+    if (message.toLowerCase().includes("already exists")) {
+      try {
+        const projectPath = await ensureDirectory(req.body?.path);
+        const existing = await runCommand("gh", ["pr", "view", "--json", "url", "--jq", ".url"], {
+          cwd: projectPath
+        });
+        res.json({ path: projectPath, url: existing.stdout.trim() });
+        return;
+      } catch {
+        res.status(409).json({ error: "A PR already exists for this branch." });
+        return;
+      }
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not create pull request." });
+  }
+});
+
+app.get("/api/projects/prs", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    await ensureGitRepository(projectPath);
+
+    const listResult = await runCommand(
+      "gh",
+      [
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "50",
+        "--json",
+        "number,title,url,headRefName,baseRefName,updatedAt,author"
+      ],
+      { cwd: projectPath }
+    );
+
+    let prs = [];
+    try {
+      const parsed = JSON.parse(listResult.stdout || "[]");
+      prs = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      prs = [];
+    }
+
+    res.json({ path: projectPath, prs });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}`;
+    if (
+      error.code === "ENOENT" ||
+      message.includes("gh: command not found") ||
+      message.toLowerCase().includes("not logged into") ||
+      message.toLowerCase().includes("authenticate")
+    ) {
+      res.status(400).json({ error: "GitHub CLI is required and must be authenticated (run: gh auth login)." });
+      return;
+    }
+
+    res.status(error.status || 500).json({ error: error.message || "Could not load open pull requests." });
+  }
+});
+
 app.get("/api/projects/search", async (req, res) => {
   try {
     const query = typeof req.query.query === "string" ? req.query.query : "";
@@ -471,6 +632,27 @@ app.get("/api/projects/search", async (req, res) => {
     res.json({ query, matches });
   } catch {
     res.json({ query: req.query.query || "", matches: [] });
+  }
+});
+
+app.get("/api/projects/worktrees", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    await ensureGitRepository(projectPath);
+
+    const result = await runCommand("git", ["worktree", "list", "--porcelain"], {
+      cwd: projectPath
+    });
+
+    const worktrees = parseWorktreeList(result.stdout).map((item) => ({
+      ...item,
+      name: path.basename(item.path),
+      current: item.path === projectPath
+    }));
+
+    res.json({ path: projectPath, worktrees });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load worktrees." });
   }
 });
 

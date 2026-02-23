@@ -58,13 +58,18 @@
               <i data-lucide="menu"></i>
             </button>
             <div class="project-info">
-              <h2 id="project-title">No project</h2>
+              <button id="project-switcher-btn" class="project-switcher-btn" type="button" aria-haspopup="listbox" aria-expanded="false" disabled>
+                <h2 id="project-title">No project</h2>
+                <i data-lucide="chevrons-up-down"></i>
+              </button>
+              <div id="worktree-menu" class="worktree-menu" role="listbox" aria-label="Project worktrees"></div>
               <p id="project-meta" class="text-truncate">Open a project to start</p>
             </div>
           </div>
           <div class="header-actions">
             <button id="commit-btn" class="secondary-btn" disabled>Commit</button>
             <button id="push-btn" class="primary-btn" disabled>Push</button>
+            <button id="pr-btn" class="secondary-btn" disabled>Create PR</button>
             <button id="refresh-btn" class="icon-btn" aria-label="Refresh" disabled>
               <i data-lucide="refresh-cw"></i>
             </button>
@@ -83,6 +88,21 @@
             </div>
             <div class="panel-content">
               <div id="files-list" class="files-list empty">No data yet.</div>
+            </div>
+            <div id="pr-section" class="pr-section collapsed">
+              <div class="panel-header pr-panel-header">
+                <button id="pr-toggle-btn" class="pr-toggle-btn" type="button" aria-expanded="false" aria-controls="pr-panel-content">
+                  <h3>Open PRs</h3>
+                  <span id="pr-count" class="badge">0</span>
+                  <i class="pr-toggle-icon" data-lucide="chevron-down"></i>
+                </button>
+                <button id="refresh-prs-btn" class="icon-btn compact-icon-btn" aria-label="Refresh pull requests">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+              </div>
+              <div id="pr-panel-content" class="panel-content pr-panel-content">
+                <div id="pr-list" class="pr-list empty">Select a git project to load pull requests.</div>
+              </div>
             </div>
           </div>
 
