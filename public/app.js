@@ -16,6 +16,13 @@ const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
 const toast = document.getElementById("toast");
 
+const menuBtn = document.getElementById("menu-btn");
+const closeSidebarBtn = document.getElementById("close-sidebar-btn");
+const sidebarOverlay = document.getElementById("sidebar-overlay");
+const backToFilesBtn = document.getElementById("back-to-files-btn");
+const filesCountEl = document.getElementById("files-count");
+const diffFileNameEl = document.getElementById("diff-file-name");
+
 function saveProjects() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
 }
@@ -73,18 +80,28 @@ function renderProjectDetails() {
   const project = getActiveProject();
 
   if (!project) {
-    projectTitleEl.textContent = "No project selected";
-    projectMetaEl.textContent = "Open a project path to start reviewing local changes.";
+    projectTitleEl.textContent = "No project";
+    projectMetaEl.textContent = "Open a project to start";
     filesListEl.className = "files-list empty";
     filesListEl.textContent = "No data yet.";
     diffViewerEl.textContent = "Pick a file to inspect its diff.";
     refreshBtn.disabled = true;
+    filesCountEl.textContent = "0";
+    diffFileNameEl.textContent = "Select a file";
+    document.body.classList.remove("viewing-diff");
     return;
   }
 
   refreshBtn.disabled = false;
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
+  filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
+
+  let statusText = "Select a file";
+  if (state.selectedFile) {
+    statusText = state.selectedFile;
+  }
+  diffFileNameEl.textContent = statusText;
 
   if (!project.isGit) {
     filesListEl.className = "files-list empty";
@@ -104,10 +121,11 @@ function renderProjectDetails() {
   filesListEl.innerHTML = project.changedFiles
     .map((item) => {
       const isActive = state.selectedFile === item.file;
+      const statusClass = `status-${item.status[0].toLowerCase()}`; // A, M, D etc -> status-a
       return `
         <button class="file-item ${isActive ? "active" : ""}" data-file="${item.file}">
           <span class="path">${item.file}</span>
-          <span class="status">${item.status}</span>
+          <span class="status ${statusClass}">${item.status}</span>
         </button>
       `;
     })
@@ -116,6 +134,7 @@ function renderProjectDetails() {
   document.querySelectorAll(".file-item").forEach((button) => {
     button.addEventListener("click", async () => {
       const file = button.dataset.file;
+      document.body.classList.add("viewing-diff");
       await openDiff(file);
     });
   });
@@ -171,6 +190,8 @@ function selectProject(projectPath) {
   state.activePath = projectPath;
   state.selectedFile = null;
   diffViewerEl.textContent = "Pick a file to inspect its diff.";
+  document.body.classList.remove("show-sidebar");
+  document.body.classList.remove("viewing-diff");
   renderProjects();
   renderProjectDetails();
 }
@@ -224,5 +245,24 @@ function init() {
     renderProjectDetails();
   }
 }
+
+// Mobile and layout interactivity bindings
+menuBtn?.addEventListener("click", () => {
+  document.body.classList.add("show-sidebar");
+});
+
+closeSidebarBtn?.addEventListener("click", () => {
+  document.body.classList.remove("show-sidebar");
+});
+
+sidebarOverlay?.addEventListener("click", () => {
+  document.body.classList.remove("show-sidebar");
+});
+
+backToFilesBtn?.addEventListener("click", () => {
+  document.body.classList.remove("viewing-diff");
+  state.selectedFile = null;
+  renderProjectDetails();
+});
 
 init();

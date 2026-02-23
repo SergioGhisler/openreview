@@ -2,65 +2,109 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Local Review</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap"
       rel="stylesheet"
     />
+    <link href="https://unpkg.com/lucide@latest/dist/lucide.css" rel="stylesheet">
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
-      <aside class="sidebar">
+    <div class="app-container" id="app-container">
+      
+      <!-- Sidebar / Project List Drawer (Hidden on mobile by default) -->
+      <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
-          <h1>Local Review</h1>
-          <p>Track your open projects</p>
+          <div class="brand">
+            <i data-lucide="git-merge"></i>
+            <h1>Local Review</h1>
+          </div>
+          <button id="close-sidebar-btn" class="icon-btn mobile-only" aria-label="Close menu">
+            <i data-lucide="x"></i>
+          </button>
         </div>
 
         <form id="open-project-form" class="open-project-form">
-          <label for="project-path">Project path</label>
-          <div class="path-row">
+          <div class="input-group">
+            <i data-lucide="folder-open" class="input-icon"></i>
             <input
               id="project-path"
               name="projectPath"
-              placeholder="/Users/you/dev/my-project"
+              placeholder="/Users/you/project"
               autocomplete="off"
               required
             />
-            <button type="submit">Open</button>
           </div>
+          <button type="submit" class="primary-btn w-full mt-2">Open Project</button>
         </form>
 
-        <div id="project-list" class="project-list"></div>
+        <div class="sidebar-section">
+          <h3 class="section-title">Recent Projects</h3>
+          <div id="project-list" class="project-list"></div>
+        </div>
       </aside>
 
-      <main class="main-panel">
-        <header class="main-header">
-          <div>
-            <h2 id="project-title">No project selected</h2>
-            <p id="project-meta">Open a project path to start reviewing local changes.</p>
+      <!-- Main Layout -->
+      <main class="main-content">
+        <!-- Top header -->
+        <header class="top-header">
+          <div class="header-left">
+            <button id="menu-btn" class="icon-btn mobile-only" aria-label="Menu">
+              <i data-lucide="menu"></i>
+            </button>
+            <div class="project-info">
+              <h2 id="project-title">No project</h2>
+              <p id="project-meta" class="text-truncate">Open a project to start</p>
+            </div>
           </div>
-          <button id="refresh-btn" class="secondary-btn" disabled>Refresh</button>
+          <button id="refresh-btn" class="icon-btn" aria-label="Refresh" disabled>
+            <i data-lucide="refresh-cw"></i>
+          </button>
         </header>
 
-        <section class="workspace">
-          <article class="files-panel">
-            <h3>Changed files</h3>
-            <div id="files-list" class="files-list empty">No data yet.</div>
-          </article>
+        <!-- Two column workspace (Files & Diff) -->
+        <div class="workspace">
+          
+          <!-- Files List Panel -->
+          <div class="files-panel" id="files-panel">
+            <div class="panel-header">
+              <h3>Changed Files</h3>
+              <span id="files-count" class="badge">0</span>
+            </div>
+            <div class="panel-content">
+              <div id="files-list" class="files-list empty">No data yet.</div>
+            </div>
+          </div>
 
-          <article class="diff-panel">
-            <h3>Diff</h3>
-            <pre id="diff-viewer" class="diff-viewer">Pick a file to inspect its diff.</pre>
-          </article>
-        </section>
+          <!-- Diff Panel -->
+          <div class="diff-panel" id="diff-panel">
+            <div class="panel-header diff-header">
+              <button id="back-to-files-btn" class="icon-btn mobile-only mr-2" aria-label="Back to files">
+                <i data-lucide="arrow-left"></i>
+              </button>
+              <h3 id="diff-file-name" class="text-truncate">Select a file</h3>
+            </div>
+            <div class="diff-content">
+              <pre id="diff-viewer" class="diff-viewer">Pick a file to inspect its diff.</pre>
+            </div>
+          </div>
+
+        </div>
       </main>
+
+      <!-- Overlay for mobile sidebar -->
+      <div id="sidebar-overlay" class="sidebar-overlay"></div>
     </div>
 
     <div id="toast" class="toast" aria-live="polite"></div>
+    
+    <!-- Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>lucide.createIcons();</script>
     <script src="/app.js"></script>
   </body>
 </html>
