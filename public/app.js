@@ -718,7 +718,10 @@ function getFilteredProjects(query) {
   if (!term) return state.projects;
 
   return state.projects.filter((project) => {
-    return project.path.toLowerCase().includes(term) || project.name.toLowerCase().includes(term);
+    return (
+      getRecentProjectPath(project).toLowerCase().includes(term) ||
+      getRecentProjectName(project).toLowerCase().includes(term)
+    );
   });
 }
 
@@ -726,9 +729,10 @@ function getProjectSuggestions(query) {
   const deduped = new Map();
 
   getFilteredProjects(query).forEach((project) => {
-    deduped.set(project.path, {
-      name: project.name,
-      path: project.path,
+    const recentPath = getRecentProjectPath(project);
+    deduped.set(recentPath, {
+      name: getRecentProjectName(project),
+      path: recentPath,
       source: "recent"
     });
   });
@@ -873,6 +877,25 @@ function loadProjects() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     state.projects = raw ? JSON.parse(raw) : [];
+    const deduped = [];
+    let changed = false;
+    for (const project of state.projects) {
+      const recentPath = project?.repoRoot || project?.recentPath || project?.path;
+      if (project.recentPath !== recentPath) changed = true;
+      project.recentPath = recentPath;
+      const existing = deduped.find((item) => isSameRepository(item, project));
+      if (existing) {
+        changed = true;
+        Object.assign(existing, project);
+        existing.recentPath = existing.recentPath || recentPath;
+      } else {
+        deduped.push(project);
+      }
+    }
+    state.projects = deduped;
+    if (changed) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
+    }
   } catch {
     state.projects = [];
   }
@@ -890,6 +913,24 @@ function getActiveProject() {
   return state.projects.find((project) => project.path === state.activePath) || null;
 }
 
+function isSameRepository(project, candidate) {
+  if (!project || !candidate) return false;
+  if (project.repoId && candidate.repoId) {
+    return project.repoId === candidate.repoId;
+  }
+  return project.path === candidate.path;
+}
+
+function getRecentProjectPath(project) {
+  if (!project) return "";
+  return project.recentPath || project.repoRoot || project.path;
+}
+
+function getRecentProjectName(project) {
+  if (!project) return "";
+  return project.repoName || project.name;
+}
+
 function renderProjects() {
   if (!state.projects.length) {
     projectListEl.innerHTML = "<p>No opened projects yet.</p>";
@@ -902,10 +943,12 @@ function renderProjects() {
       const dirtyCount = project.changedFiles.length;
       const incomingCount = Number(project.remote?.behind || 0);
       const incomingText = incomingCount > 0 ? ` • ↓ ${incomingCount}` : "";
+      const title = getRecentProjectName(project);
+      const sidebarPath = getRecentProjectPath(project);
       return `
         <button class="project-item ${isActive ? "active" : ""}" data-path="${project.path}">
-          <strong>${project.name}</strong>
-          <small>${project.path}</small>
+          <strong>${title}</strong>
+          <small>${sidebarPath}</small>
           <small>${project.isGit ? `${dirtyCount} changed file(s)${incomingText}` : "Not a git repository"}</small>
         </button>
       `;
@@ -1439,10 +1482,14 @@ async function openProject(projectPath) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not open project.");
 
-    const existing = state.projects.find((project) => project.path === payload.path);
+    const existing = state.projects.find((project) => isSameRepository(project, payload));
+    const recentPath = payload.repoRoot || payload.path;
     if (existing) {
+      const existingRecentPath = getRecentProjectPath(existing) || recentPath;
       Object.assign(existing, payload);
+      existing.recentPath = existingRecentPath;
     } else {
+      payload.recentPath = recentPath;
       state.projects.unshift(payload);
     }
 

@@ -154,6 +154,9 @@ async function getProjectSnapshot(projectPath) {
       name,
       path: projectPath,
       isGit: false,
+      repoId: null,
+      repoRoot: null,
+      repoName: name,
       branch: null,
       changedFiles: [],
       remote: {
@@ -165,7 +168,7 @@ async function getProjectSnapshot(projectPath) {
     };
   }
 
-  const [branchResult, statusResult, upstreamCheck] = await Promise.all([
+  const [branchResult, statusResult, upstreamCheck, commonDirResult] = await Promise.all([
     runCommand("git", ["branch", "--show-current"], { cwd: projectPath }).catch(() =>
       runCommand("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: projectPath }).catch(() => ({ stdout: "" }))
     ),
@@ -173,7 +176,8 @@ async function getProjectSnapshot(projectPath) {
     runCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
       cwd: projectPath,
       okExitCodes: [0, 128]
-    })
+    }),
+    runCommand("git", ["rev-parse", "--git-common-dir"], { cwd: projectPath }).catch(() => ({ stdout: ".git" }))
   ]);
 
   const lines = statusResult.stdout.split("\n").filter(Boolean);
@@ -197,10 +201,17 @@ async function getProjectSnapshot(projectPath) {
     }
   }
 
+  const commonDirRaw = commonDirResult.stdout.trim() || ".git";
+  const repoId = path.resolve(projectPath, commonDirRaw);
+  const repoRoot = path.dirname(repoId);
+
   return {
     name,
     path: projectPath,
     isGit: true,
+    repoId,
+    repoRoot,
+    repoName: path.basename(repoRoot) || name,
     branch: branchResult.stdout.trim() || "no-commit-branch",
     changedFiles,
     remote: {
