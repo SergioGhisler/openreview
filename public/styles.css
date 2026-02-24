@@ -1686,6 +1686,62 @@ input:focus {
   margin-top: 0.2rem;
 }
 
+.commit-draft-status {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.commit-draft-status.loading::after {
+  content: "...";
+  display: inline-block;
+  width: 1.1rem;
+  margin-left: 0.1rem;
+  overflow: hidden;
+  animation: commit-draft-dots 1.1s steps(4, end) infinite;
+}
+
+.commit-draft-status.error {
+  color: var(--danger);
+}
+
+@keyframes commit-draft-dots {
+  0% {
+    width: 0;
+  }
+  100% {
+    width: 1.1rem;
+  }
+}
+
+.commit-draft-card {
+  width: min(920px, 98vw);
+  min-height: min(82vh, 760px);
+}
+
+#commit-draft-message {
+  min-height: 3.2rem;
+}
+
+#commit-draft-description {
+  min-height: min(46vh, 420px);
+  line-height: 1.45;
+}
+
+.commit-draft-card textarea {
+  resize: vertical;
+}
+
+.commit-draft-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.commit-draft-actions {
+  flex-wrap: wrap;
+}
+
 @media (max-width: 980px) {
   .toast {
     bottom: 1.5rem;
