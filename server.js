@@ -5,7 +5,16 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const app = express();
-const PORT = process.env.PORT || 5050;
+const PREFERRED_PORT = Number.parseInt(process.env.PORT, 10) || 5050;
+const MAX_PORT_FALLBACK_ATTEMPTS = 25;
+const RUN_PROFILE_STORE_PATH = path.join(os.homedir(), ".openreview-run-profiles.json");
+const RUN_LOG_LIMIT = 600;
+const RUN_FORCE_KILL_DELAY_MS = 2500;
+const runProfileStore = {
+  loaded: false,
+  data: { projects: {} }
+};
+const activeRuns = new Map();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -143,6 +152,335 @@ function parseWorktreeList(stdout) {
 
   pushCurrent();
   return worktrees;
+}
+
+async function loadRunProfileStore() {
+  if (runProfileStore.loaded) return;
+  const raw = await fs.readFile(RUN_PROFILE_STORE_PATH, "utf8").catch(() => "");
+  if (!raw.trim()) {
+    runProfileStore.loaded = true;
+    runProfileStore.data = { projects: {} };
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const projects = parsed && typeof parsed === "object" ? parsed.projects : null;
+    runProfileStore.data = {
+      projects: projects && typeof projects === "object" ? projects : {}
+    };
+  } catch {
+    runProfileStore.data = { projects: {} };
+  }
+  runProfileStore.loaded = true;
+}
+
+async function saveRunProfileStore() {
+  await fs.writeFile(RUN_PROFILE_STORE_PATH, JSON.stringify(runProfileStore.data, null, 2));
+}
+
+function toSafeId(value, fallbackPrefix) {
+  const raw = String(value || "").trim().toLowerCase();
+  const safe = raw.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (safe) return safe;
+  return `${fallbackPrefix}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sanitizeRunGroups(inputGroups) {
+  if (!Array.isArray(inputGroups)) return [];
+
+  return inputGroups
+    .map((group, groupIndex) => {
+      const name = String(group?.name || "").trim();
+      const commandsInput = Array.isArray(group?.commands) ? group.commands : [];
+      const commands = commandsInput
+        .map((commandItem, commandIndex) => {
+          const command = String(commandItem?.command || "").trim();
+          if (!command) return null;
+          const label = String(commandItem?.label || `cmd-${commandIndex + 1}`).trim();
+          const envInput = commandItem?.env && typeof commandItem.env === "object" ? commandItem.env : {};
+          const env = Object.fromEntries(
+            Object.entries(envInput).map(([key, value]) => [String(key), String(value)])
+          );
+          return {
+            id: toSafeId(commandItem?.id || label, `cmd-${commandIndex + 1}`),
+            label,
+            command,
+            cwd: String(commandItem?.cwd || "").trim() || null,
+            env
+          };
+        })
+        .filter(Boolean);
+
+      if (!name || !commands.length) return null;
+      return {
+        id: toSafeId(group?.id || name, `group-${groupIndex + 1}`),
+        name,
+        commands
+      };
+    })
+    .filter(Boolean);
+}
+
+function getRunRepoConfig(projectKey) {
+  const current = runProfileStore.data.projects[projectKey];
+  if (current) {
+    const normalized = normalizeSharedRunRepoConfig(current);
+    runProfileStore.data.projects[projectKey] = normalized.config;
+    return normalized.config;
+  }
+  const created = { defaults: [] };
+  runProfileStore.data.projects[projectKey] = created;
+  return created;
+}
+
+function mergeRunGroups(baseGroups, extraGroups) {
+  const merged = [];
+  const seen = new Set();
+
+  const addGroups = (groups) => {
+    groups.forEach((group) => {
+      const key = `${group.id}::${group.name}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(group);
+    });
+  };
+
+  addGroups(baseGroups);
+  addGroups(extraGroups);
+  return merged;
+}
+
+function normalizeSharedRunRepoConfig(repoConfig) {
+  const defaultGroups = sanitizeRunGroups(repoConfig?.defaults || []);
+  const worktreeMap = repoConfig?.worktrees && typeof repoConfig.worktrees === "object" ? repoConfig.worktrees : {};
+  const worktreeGroups = Object.values(worktreeMap)
+    .flatMap((value) => sanitizeRunGroups(value));
+  const mergedDefaults = mergeRunGroups(defaultGroups, worktreeGroups);
+  const migratedFromWorktrees = Object.keys(worktreeMap).length > 0;
+
+  return {
+    config: {
+      defaults: mergedDefaults
+    },
+    migratedFromWorktrees
+  };
+}
+
+function getEffectiveRunGroups(repoConfig, worktreePath) {
+  void worktreePath;
+  const normalized = normalizeSharedRunRepoConfig(repoConfig).config;
+  const worktreeGroups = [];
+  const defaultGroups = Array.isArray(normalized.defaults) ? normalized.defaults : [];
+  const effective = defaultGroups;
+  return {
+    defaultGroups,
+    worktreeGroups,
+    effectiveGroups: effective
+  };
+}
+
+function buildRunKey(projectPath, groupId) {
+  return `${projectPath}::${groupId}`;
+}
+
+function appendRunLog(run, stream, message) {
+  const text = String(message || "");
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return;
+  for (const line of lines) {
+    run.logSeq += 1;
+    run.logs.push({ seq: run.logSeq, at: new Date().toISOString(), stream, line });
+  }
+  if (run.logs.length > RUN_LOG_LIMIT) {
+    run.logs.splice(0, run.logs.length - RUN_LOG_LIMIT);
+  }
+}
+
+function serializeRun(run) {
+  return {
+    key: run.key,
+    projectPath: run.projectPath,
+    groupId: run.groupId,
+    groupName: run.groupName,
+    startedAt: run.startedAt,
+    stoppedAt: run.stoppedAt,
+    status: run.status,
+    commands: run.commands.map((item) => ({
+      id: item.id,
+      label: item.label,
+      command: item.command,
+      pid: item.pid,
+      status: item.status,
+      exitCode: item.exitCode
+    }))
+  };
+}
+
+function startRunForGroup(projectPath, group) {
+  const run = {
+    key: buildRunKey(projectPath, group.id),
+    projectPath,
+    groupId: group.id,
+    groupName: group.name,
+    startedAt: new Date().toISOString(),
+    stoppedAt: null,
+    status: "running",
+    logSeq: 0,
+    logs: [],
+    stopRequested: false,
+    commands: group.commands.map((commandDef) => ({
+      id: commandDef.id,
+      label: commandDef.label,
+      command: commandDef.command,
+      pid: null,
+      status: "pending",
+      exitCode: null,
+      child: null
+    }))
+  };
+
+  const markStopped = () => {
+    if (run.status === "stopped") return;
+    run.status = "stopped";
+    run.stoppedAt = new Date().toISOString();
+  };
+
+  const markRemainingSkipped = (fromIndex) => {
+    for (let index = fromIndex; index < run.commands.length; index += 1) {
+      if (run.commands[index].status === "pending") {
+        run.commands[index].status = "skipped";
+      }
+    }
+  };
+
+  const launchNext = (index) => {
+    if (run.stopRequested) {
+      markRemainingSkipped(index);
+      markStopped();
+      return;
+    }
+
+    const runCommandDef = run.commands[index];
+    const sourceDef = group.commands[index];
+    if (!runCommandDef || !sourceDef) {
+      markStopped();
+      return;
+    }
+
+    const commandCwd = sourceDef.cwd ? path.resolve(projectPath, sourceDef.cwd) : projectPath;
+    const child = spawn(sourceDef.command, {
+      cwd: commandCwd,
+      shell: true,
+      env: {
+        ...process.env,
+        ...(sourceDef.env || {})
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    runCommandDef.child = child;
+    runCommandDef.pid = child.pid || null;
+    runCommandDef.status = "running";
+
+    appendRunLog(run, "system", `[${runCommandDef.label}] started: ${runCommandDef.command}`);
+
+    child.stdout.on("data", (chunk) => {
+      appendRunLog(run, "stdout", `[${runCommandDef.label}] ${String(chunk)}`);
+    });
+
+    child.stderr.on("data", (chunk) => {
+      appendRunLog(run, "stderr", `[${runCommandDef.label}] ${String(chunk)}`);
+    });
+
+    child.on("error", (error) => {
+      runCommandDef.status = "failed";
+      runCommandDef.exitCode = 1;
+      run.stopRequested = true;
+      appendRunLog(run, "stderr", `[${runCommandDef.label}] ${error.message || "Failed to start command."}`);
+      markRemainingSkipped(index + 1);
+      markStopped();
+    });
+
+    child.on("close", (code) => {
+      runCommandDef.exitCode = code;
+      if (runCommandDef.status !== "failed") {
+        runCommandDef.status = "exited";
+      }
+      appendRunLog(run, "system", `[${runCommandDef.label}] exited with code ${code}`);
+
+      if (run.stopRequested) {
+        markRemainingSkipped(index + 1);
+        markStopped();
+        return;
+      }
+
+      if (code !== 0) {
+        appendRunLog(run, "system", `[${runCommandDef.label}] failed, stopping remaining commands.`);
+        markRemainingSkipped(index + 1);
+        markStopped();
+        return;
+      }
+
+      launchNext(index + 1);
+    });
+  };
+
+  launchNext(0);
+
+  return run;
+}
+
+async function stopRun(run) {
+  run.stopRequested = true;
+  const activeChildren = run.commands
+    .map((item) => item.child)
+    .filter((child) => child && !child.killed);
+
+  if (!activeChildren.length) {
+    run.status = "stopped";
+    if (!run.stoppedAt) run.stoppedAt = new Date().toISOString();
+    return;
+  }
+
+  await Promise.all(
+    activeChildren.map(
+      (child) =>
+        new Promise((resolve) => {
+          let settled = false;
+          const done = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+
+          const timer = setTimeout(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // ignore kill failures
+            }
+            done();
+          }, RUN_FORCE_KILL_DELAY_MS);
+
+          child.once("close", () => {
+            clearTimeout(timer);
+            done();
+          });
+
+          try {
+            child.kill("SIGTERM");
+          } catch {
+            clearTimeout(timer);
+            done();
+          }
+        })
+    )
+  );
+
+  run.status = "stopped";
+  run.stoppedAt = new Date().toISOString();
 }
 
 async function getProjectSnapshot(projectPath) {
@@ -896,6 +1234,198 @@ app.post("/api/projects/worktrees/remove", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Local review web app running at http://localhost:${PORT}`);
+app.get("/api/projects/run-profiles", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    const snapshot = await getProjectSnapshot(projectPath);
+    const projectKey = snapshot.repoId || snapshot.repoRoot || projectPath;
+
+    await loadRunProfileStore();
+    const repoConfig = getRunRepoConfig(projectKey);
+    const normalized = normalizeSharedRunRepoConfig(repoConfig);
+    runProfileStore.data.projects[projectKey] = normalized.config;
+    if (normalized.migratedFromWorktrees) {
+      await saveRunProfileStore();
+    }
+    const { defaultGroups, worktreeGroups, effectiveGroups } = getEffectiveRunGroups(normalized.config, projectPath);
+
+    res.json({
+      path: projectPath,
+      projectKey,
+      defaultGroups,
+      worktreeGroups,
+      effectiveGroups
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load run profiles." });
+  }
 });
+
+app.post("/api/projects/run-profiles", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const snapshot = await getProjectSnapshot(projectPath);
+    const projectKey = snapshot.repoId || snapshot.repoRoot || projectPath;
+
+    await loadRunProfileStore();
+    const repoConfig = getRunRepoConfig(projectKey);
+    const normalizedRepoConfig = normalizeSharedRunRepoConfig(repoConfig).config;
+
+    const currentDefaultGroups = sanitizeRunGroups(normalizedRepoConfig.defaults || []);
+    const nextDefaultGroups = req.body?.defaultGroups !== undefined
+      ? sanitizeRunGroups(req.body.defaultGroups)
+      : currentDefaultGroups;
+    const incomingWorktreeGroups = req.body?.worktreeGroups !== undefined
+      ? sanitizeRunGroups(req.body.worktreeGroups)
+      : [];
+
+    const sharedDefaults = mergeRunGroups(nextDefaultGroups, incomingWorktreeGroups);
+    runProfileStore.data.projects[projectKey] = { defaults: sharedDefaults };
+
+    await saveRunProfileStore();
+
+    const { defaultGroups, worktreeGroups, effectiveGroups } = getEffectiveRunGroups(
+      runProfileStore.data.projects[projectKey],
+      projectPath
+    );
+
+    res.json({
+      path: projectPath,
+      projectKey,
+      defaultGroups,
+      worktreeGroups,
+      effectiveGroups
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not save run profiles." });
+  }
+});
+
+app.post("/api/projects/run/start", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const groupId = String(req.body?.groupId || "").trim();
+    if (!groupId) {
+      res.status(400).json({ error: "Run profile id is required." });
+      return;
+    }
+
+    const snapshot = await getProjectSnapshot(projectPath);
+    const projectKey = snapshot.repoId || snapshot.repoRoot || projectPath;
+
+    await loadRunProfileStore();
+    const repoConfig = getRunRepoConfig(projectKey);
+    const { effectiveGroups } = getEffectiveRunGroups(repoConfig, projectPath);
+    const group = effectiveGroups.find((item) => item.id === groupId);
+
+    if (!group) {
+      res.status(400).json({ error: "Run profile not found for this worktree." });
+      return;
+    }
+
+    const runKey = buildRunKey(projectPath, group.id);
+    const current = activeRuns.get(runKey);
+    if (current && current.status === "running") {
+      res.status(400).json({ error: "Run profile is already running." });
+      return;
+    }
+
+    const run = startRunForGroup(projectPath, group);
+    activeRuns.set(run.key, run);
+    res.json({ run: serializeRun(run) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not start run profile." });
+  }
+});
+
+app.post("/api/projects/run/stop", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    const groupId = String(req.body?.groupId || "").trim();
+    if (!groupId) {
+      res.status(400).json({ error: "Run profile id is required." });
+      return;
+    }
+
+    const runKey = buildRunKey(projectPath, groupId);
+    const run = activeRuns.get(runKey);
+    if (!run) {
+      res.json({ stopped: true });
+      return;
+    }
+
+    await stopRun(run);
+    res.json({ stopped: true, run: serializeRun(run) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not stop run profile." });
+  }
+});
+
+app.get("/api/projects/run/status", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    const runs = Array.from(activeRuns.values())
+      .filter((run) => run.projectPath === projectPath)
+      .map(serializeRun);
+    res.json({ path: projectPath, runs });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load run status." });
+  }
+});
+
+app.get("/api/projects/run/logs", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.query.path);
+    const groupId = String(req.query.groupId || "").trim();
+    const since = Number.parseInt(String(req.query.since || "0"), 10) || 0;
+    if (!groupId) {
+      res.status(400).json({ error: "Run profile id is required." });
+      return;
+    }
+
+    const runKey = buildRunKey(projectPath, groupId);
+    const run = activeRuns.get(runKey);
+    if (!run) {
+      res.json({ path: projectPath, groupId, logs: [], nextSince: since });
+      return;
+    }
+
+    const logs = run.logs.filter((entry) => entry.seq > since);
+    res.json({
+      path: projectPath,
+      groupId,
+      logs,
+      nextSince: run.logSeq
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not load run logs." });
+  }
+});
+
+function startServerWithPortFallback(preferredPort, retriesLeft) {
+  const server = app.listen(preferredPort);
+
+  server.once("listening", () => {
+    const address = server.address();
+    const activePort = typeof address === "object" && address ? address.port : preferredPort;
+    if (activePort !== preferredPort) {
+      console.log(`Requested port ${preferredPort} unavailable. Using http://localhost:${activePort}`);
+    } else {
+      console.log(`Local review web app running at http://localhost:${activePort}`);
+    }
+  });
+
+  server.once("error", (error) => {
+    if (error && error.code === "EADDRINUSE" && retriesLeft > 0) {
+      const nextPort = preferredPort + 1;
+      console.warn(`Port ${preferredPort} is in use. Retrying on ${nextPort}...`);
+      startServerWithPortFallback(nextPort, retriesLeft - 1);
+      return;
+    }
+
+    console.error(`Could not start server on port ${preferredPort}:`, error.message || error);
+    process.exit(1);
+  });
+}
+
+startServerWithPortFallback(PREFERRED_PORT, MAX_PORT_FALLBACK_ATTEMPTS);

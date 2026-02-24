@@ -110,6 +110,27 @@
             <div class="panel-content">
               <div id="files-list" class="files-list empty">No data yet.</div>
             </div>
+            <div id="run-section" class="run-section collapsed">
+              <div class="panel-header run-panel-header">
+                <button id="run-toggle-btn" class="run-toggle-btn" type="button" aria-expanded="false" aria-controls="run-panel-content">
+                  <h3>Run Profiles</h3>
+                  <span id="run-count" class="badge">0</span>
+                  <i class="run-toggle-icon" data-lucide="chevron-down"></i>
+                </button>
+                <button id="add-run-worktree-btn" class="icon-btn compact-icon-btn" aria-label="Add shared run profile">
+                  <i data-lucide="plus"></i>
+                </button>
+                <button id="add-run-default-btn" class="icon-btn compact-icon-btn" aria-label="Add shared run profile">
+                  <i data-lucide="layers"></i>
+                </button>
+                <button id="refresh-runs-btn" class="icon-btn compact-icon-btn" aria-label="Refresh run profiles">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+              </div>
+              <div id="run-panel-content" class="panel-content run-panel-content">
+                <div id="run-list" class="run-list empty">Select a git project to configure and run profiles.</div>
+              </div>
+            </div>
             <div id="outgoing-section" class="outgoing-section collapsed">
               <div class="panel-header outgoing-panel-header">
                 <button id="outgoing-toggle-btn" class="outgoing-toggle-btn" type="button" aria-expanded="false" aria-controls="outgoing-panel-content">
@@ -163,6 +184,30 @@
     </div>
 
     <div id="toast" class="toast" aria-live="polite"></div>
+
+    <div id="run-profile-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="run-profile-modal-title">
+        <h3 id="run-profile-modal-title">New Run Profile</h3>
+        <label class="modal-label" for="run-profile-name">Profile name</label>
+        <input id="run-profile-name" type="text" placeholder="web" autocomplete="off" />
+        <label class="modal-label" for="run-profile-commands">Commands (one per line)</label>
+        <textarea id="run-profile-commands" rows="6" placeholder="npm install\nnpm start"></textarea>
+        <div class="modal-actions">
+          <button id="run-profile-cancel-btn" type="button" class="secondary-btn">Cancel</button>
+          <button id="run-profile-save-btn" type="button" class="primary-btn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="run-log-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card modal-card-log" role="dialog" aria-modal="true" aria-labelledby="run-log-modal-title">
+        <div class="modal-row">
+          <h3 id="run-log-modal-title">Run Logs</h3>
+          <button id="run-log-close-btn" type="button" class="secondary-btn">Close</button>
+        </div>
+        <pre id="run-log-modal-content" class="run-log-modal-content">No logs yet.</pre>
+      </div>
+    </div>
     
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>

@@ -47,6 +47,22 @@ const prToggleBtn = document.getElementById("pr-toggle-btn");
 const prCountEl = document.getElementById("pr-count");
 const prListEl = document.getElementById("pr-list");
 const refreshPrsBtn = document.getElementById("refresh-prs-btn");
+const runSectionEl = document.getElementById("run-section");
+const runToggleBtn = document.getElementById("run-toggle-btn");
+const runCountEl = document.getElementById("run-count");
+const runListEl = document.getElementById("run-list");
+const addRunWorktreeBtn = document.getElementById("add-run-worktree-btn");
+const addRunDefaultBtn = document.getElementById("add-run-default-btn");
+const refreshRunsBtn = document.getElementById("refresh-runs-btn");
+const runProfileModalEl = document.getElementById("run-profile-modal");
+const runProfileNameInput = document.getElementById("run-profile-name");
+const runProfileCommandsInput = document.getElementById("run-profile-commands");
+const runProfileCancelBtn = document.getElementById("run-profile-cancel-btn");
+const runProfileSaveBtn = document.getElementById("run-profile-save-btn");
+const runLogModalEl = document.getElementById("run-log-modal");
+const runLogModalTitleEl = document.getElementById("run-log-modal-title");
+const runLogModalContentEl = document.getElementById("run-log-modal-content");
+const runLogCloseBtn = document.getElementById("run-log-close-btn");
 
 const suggestionState = {
   visible: false,
@@ -89,6 +105,23 @@ const outgoingState = {
   items: [],
   error: null,
   expanded: false
+};
+
+const runState = {
+  loadingProfiles: false,
+  loadingStatus: false,
+  expanded: false,
+  projectKey: null,
+  defaultGroups: [],
+  worktreeGroups: [],
+  effectiveGroups: [],
+  runsByGroupId: {},
+  logCursorByGroupId: {},
+  latestLogByGroupId: {},
+  logLinesByGroupId: {},
+  activeLogGroupId: null,
+  pendingCreateScope: null,
+  pollId: null
 };
 
 const swipeConfig = {
@@ -438,6 +471,17 @@ function toggleOutgoingPanel() {
   setOutgoingPanelExpanded(!outgoingState.expanded);
 }
 
+function setRunPanelExpanded(expanded) {
+  runState.expanded = expanded;
+  runSectionEl?.classList.toggle("expanded", expanded);
+  runSectionEl?.classList.toggle("collapsed", !expanded);
+  runToggleBtn?.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function toggleRunPanel() {
+  setRunPanelExpanded(!runState.expanded);
+}
+
 function renderOutgoingList() {
   const project = getActiveProject();
   const isGitProject = Boolean(project && project.isGit);
@@ -595,6 +639,446 @@ async function loadOpenPrsForActiveProject() {
     prState.loading = false;
     renderPrList();
   }
+}
+
+function getRunSourceLabel(groupId) {
+  void groupId;
+  return "shared";
+}
+
+function decodeDataId(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return String(value || "");
+  }
+}
+
+function hasExpandedRunLogs() {
+  return Boolean(runState.activeLogGroupId);
+}
+
+function renderRunProfiles() {
+  const project = getActiveProject();
+  const isGitProject = Boolean(project && project.isGit);
+  const groupCount = runState.effectiveGroups.length;
+  runCountEl.textContent = String(groupCount);
+
+  const busy = runState.loadingProfiles || runState.loadingStatus;
+  refreshRunsBtn.disabled = !isGitProject || busy;
+  addRunWorktreeBtn.disabled = !isGitProject || busy;
+  addRunDefaultBtn.disabled = !isGitProject || busy;
+
+  if (!isGitProject) {
+    runListEl.className = "run-list empty";
+    runListEl.textContent = "Select a git project to configure and run profiles.";
+    return;
+  }
+
+  if (runState.loadingProfiles) {
+    runListEl.className = "run-list empty";
+    runListEl.textContent = "Loading run profiles...";
+    return;
+  }
+
+  if (!groupCount) {
+    runListEl.className = "run-list empty";
+    runListEl.textContent = "No run profiles yet. Add one for this worktree or as repository default.";
+    return;
+  }
+
+  runListEl.className = "run-list";
+  runListEl.innerHTML = runState.effectiveGroups
+    .map((group, index) => {
+      const encodedGroupId = encodeURIComponent(group.id || "");
+      const run = runState.runsByGroupId[group.id] || null;
+      const running = Boolean(run && run.status === "running");
+      const commands = (group.commands || []).map((item) => item.command).join("\n");
+      const source = getRunSourceLabel(group.id);
+      const latestLog = runState.latestLogByGroupId[group.id] || "";
+      return `
+        <div class="run-item">
+          <div class="run-item-top">
+            <span class="run-item-title">${escapeHtml(group.name || "Run profile")}</span>
+            <span class="run-status-pill ${running ? "running" : ""}">${running ? "running" : "stopped"}</span>
+          </div>
+          <div class="run-item-top">
+            <span class="run-source-pill">${source}</span>
+          </div>
+          <div class="run-commands">${escapeHtml(commands || "")}</div>
+          ${latestLog ? `<div class="run-commands">${escapeHtml(latestLog)}</div>` : ""}
+          <div class="run-item-actions">
+            <button type="button" data-run-start="${encodedGroupId}" ${running ? "disabled" : ""}>Start</button>
+            <button type="button" data-run-stop="${encodedGroupId}" ${running ? "" : "disabled"}>Stop</button>
+            <button type="button" data-run-logs="${encodedGroupId}">Logs</button>
+            <button type="button" data-run-delete="${index}">Delete</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function loadRunProfilesForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    runState.projectKey = null;
+    runState.defaultGroups = [];
+    runState.worktreeGroups = [];
+    runState.effectiveGroups = [];
+    runState.runsByGroupId = {};
+    runState.latestLogByGroupId = {};
+    runState.logCursorByGroupId = {};
+    runState.logLinesByGroupId = {};
+    closeRunLogModal();
+    renderRunProfiles();
+    return;
+  }
+
+  runState.loadingProfiles = true;
+  renderRunProfiles();
+
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/run-profiles?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load run profiles.");
+
+    runState.projectKey = payload.projectKey || null;
+    runState.defaultGroups = payload.defaultGroups || [];
+    runState.worktreeGroups = payload.worktreeGroups || [];
+    runState.effectiveGroups = payload.effectiveGroups || [];
+  } catch (error) {
+    runState.projectKey = null;
+    runState.defaultGroups = [];
+    runState.worktreeGroups = [];
+    runState.effectiveGroups = [];
+    closeRunLogModal();
+    showToast(error.message, true);
+  } finally {
+    runState.loadingProfiles = false;
+    renderRunProfiles();
+  }
+}
+
+async function saveRunProfilesForActiveProject(nextDefaultGroups, nextWorktreeGroups) {
+  const project = getActiveProject();
+  if (!project || !project.isGit) return;
+
+  const response = await fetch("/api/projects/run-profiles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      path: project.path,
+      defaultGroups: nextDefaultGroups,
+      worktreeGroups: nextWorktreeGroups
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not save run profiles.");
+
+  runState.projectKey = payload.projectKey || null;
+  runState.defaultGroups = payload.defaultGroups || [];
+  runState.worktreeGroups = payload.worktreeGroups || [];
+  runState.effectiveGroups = payload.effectiveGroups || [];
+}
+
+function openRunProfileModal(scope) {
+  runState.pendingCreateScope = scope;
+  if (runProfileNameInput) runProfileNameInput.value = "web";
+  if (runProfileCommandsInput) runProfileCommandsInput.value = "npm start";
+  runProfileModalEl?.classList.remove("hidden");
+  runProfileModalEl?.setAttribute("aria-hidden", "false");
+  runProfileNameInput?.focus();
+  runProfileNameInput?.select();
+}
+
+function closeRunProfileModal() {
+  runState.pendingCreateScope = null;
+  runProfileModalEl?.classList.add("hidden");
+  runProfileModalEl?.setAttribute("aria-hidden", "true");
+}
+
+function renderRunLogModal() {
+  const groupId = runState.activeLogGroupId;
+  if (!groupId || !runLogModalContentEl) return;
+
+  const group = runState.effectiveGroups.find((item) => item.id === groupId);
+  const title = group ? `${group.name} logs` : "Run Logs";
+  if (runLogModalTitleEl) {
+    runLogModalTitleEl.textContent = title;
+  }
+
+  const logLines = runState.logLinesByGroupId[groupId] || [];
+  const text = logLines.length ? logLines.slice(-220).join("\n") : "No logs yet.";
+  const nearBottom =
+    runLogModalContentEl.scrollTop + runLogModalContentEl.clientHeight >= runLogModalContentEl.scrollHeight - 12;
+  runLogModalContentEl.textContent = text;
+  if (nearBottom || runLogModalContentEl.scrollTop === 0) {
+    runLogModalContentEl.scrollTop = runLogModalContentEl.scrollHeight;
+  }
+}
+
+async function openRunLogModal(groupId) {
+  if (!groupId) return;
+  runState.activeLogGroupId = groupId;
+  runLogModalEl?.classList.remove("hidden");
+  runLogModalEl?.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  await loadRunLogsForGroup(groupId);
+  renderRunLogModal();
+}
+
+function closeRunLogModal() {
+  runState.activeLogGroupId = null;
+  runLogModalEl?.classList.add("hidden");
+  runLogModalEl?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+}
+
+let runLogTouchStartY = 0;
+
+function bindRunLogTouchGuards() {
+  runLogModalEl?.addEventListener(
+    "touchmove",
+    (event) => {
+      if (runLogModalEl.classList.contains("hidden")) return;
+      if (!runLogModalContentEl?.contains(event.target)) {
+        event.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
+  runLogModalContentEl?.addEventListener(
+    "touchstart",
+    (event) => {
+      runLogTouchStartY = event.touches[0]?.clientY || 0;
+    },
+    { passive: true }
+  );
+
+  runLogModalContentEl?.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!runLogModalContentEl) return;
+      const currentY = event.touches[0]?.clientY || 0;
+      const deltaY = currentY - runLogTouchStartY;
+      const atTop = runLogModalContentEl.scrollTop <= 0;
+      const atBottom =
+        runLogModalContentEl.scrollTop + runLogModalContentEl.clientHeight >= runLogModalContentEl.scrollHeight - 1;
+
+      if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
+        event.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+}
+
+function buildRunProfileFromModal() {
+  const name = String(runProfileNameInput?.value || "").trim();
+  if (!name) {
+    throw new Error("Profile name is required.");
+  }
+
+  const commandsRaw = String(runProfileCommandsInput?.value || "");
+  const commands = commandsRaw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((command, index) => ({
+      id: `${name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "cmd"}-${index + 1}`,
+      label: `cmd-${index + 1}`,
+      command
+    }));
+
+  if (!commands.length) {
+    throw new Error("Add at least one command.");
+  }
+
+  return {
+    id: `${name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "group"}-${Date.now().toString(36)}`,
+    name,
+    commands
+  };
+}
+
+async function addRunProfile(scope, profile) {
+  const project = getActiveProject();
+  if (!project || !project.isGit) return;
+  if (!profile) return;
+
+  try {
+    const defaultGroups = [...runState.defaultGroups];
+    const worktreeGroups = [...runState.worktreeGroups];
+    defaultGroups.push(profile);
+    await saveRunProfilesForActiveProject(defaultGroups, worktreeGroups);
+    showToast(`Saved ${profile.name}`);
+    renderRunProfiles();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function deleteRunProfileAtIndex(index) {
+  const group = runState.effectiveGroups[index];
+  if (!group) return;
+
+  const source = getRunSourceLabel(group.id);
+  const confirmed = window.confirm(`Delete run profile "${group.name}" from ${source}?`);
+  if (!confirmed) return;
+
+  try {
+    const defaultGroups = [...runState.defaultGroups];
+    const worktreeGroups = [...runState.worktreeGroups];
+    if (source === "worktree") {
+      const next = worktreeGroups.filter((item) => item.id !== group.id);
+      await saveRunProfilesForActiveProject(defaultGroups, next);
+    } else {
+      const next = defaultGroups.filter((item) => item.id !== group.id);
+      await saveRunProfilesForActiveProject(next, worktreeGroups);
+    }
+    showToast(`Deleted ${group.name}`);
+    renderRunProfiles();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function loadRunStatusesForActiveProject(options = {}) {
+  const shouldRender = options.render !== false;
+  const project = getActiveProject();
+  if (!project || !project.isGit) {
+    runState.runsByGroupId = {};
+    if (shouldRender) renderRunProfiles();
+    return;
+  }
+
+  runState.loadingStatus = true;
+  try {
+    const params = new URLSearchParams({ path: project.path });
+    const response = await fetch(`/api/projects/run/status?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load run status.");
+
+    runState.runsByGroupId = {};
+    (payload.runs || []).forEach((run) => {
+      runState.runsByGroupId[run.groupId] = run;
+    });
+  } catch (error) {
+    runState.runsByGroupId = {};
+  } finally {
+    runState.loadingStatus = false;
+    if (shouldRender) renderRunProfiles();
+  }
+}
+
+async function loadRunLogsForGroup(groupId) {
+  const project = getActiveProject();
+  if (!project || !project.isGit || !groupId) return;
+
+  try {
+    const since = Number(runState.logCursorByGroupId[groupId] || 0);
+    const params = new URLSearchParams({
+      path: project.path,
+      groupId,
+      since: String(since)
+    });
+    const response = await fetch(`/api/projects/run/logs?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load run logs.");
+
+    runState.logCursorByGroupId[groupId] = Number(payload.nextSince || since);
+    const lines = (payload.logs || []).map((item) => item.line).filter(Boolean);
+    if (lines.length) {
+      const existing = runState.logLinesByGroupId[groupId] || [];
+      const merged = existing.concat(lines);
+      runState.logLinesByGroupId[groupId] = merged.slice(-220);
+      runState.latestLogByGroupId[groupId] = lines[lines.length - 1];
+      if (runState.activeLogGroupId === groupId) renderRunLogModal();
+    }
+  } catch {
+    // ignore log polling errors
+  }
+}
+
+async function startRunProfile(groupId) {
+  const project = getActiveProject();
+  if (!project || !project.isGit || !groupId) return;
+
+  try {
+    runState.logCursorByGroupId[groupId] = 0;
+    runState.latestLogByGroupId[groupId] = "";
+    runState.logLinesByGroupId[groupId] = [];
+    if (runState.activeLogGroupId === groupId) {
+      renderRunLogModal();
+    }
+
+    const response = await fetch("/api/projects/run/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, groupId })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not start run profile.");
+
+    runState.runsByGroupId[groupId] = payload.run;
+    showToast(`Started ${payload.run.groupName}`);
+    await loadRunStatusesForActiveProject();
+    await loadRunLogsForGroup(groupId);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function stopRunProfile(groupId) {
+  const project = getActiveProject();
+  if (!project || !project.isGit || !groupId) return;
+
+  try {
+    const response = await fetch("/api/projects/run/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path, groupId })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not stop run profile.");
+
+    if (payload.run) {
+      runState.runsByGroupId[groupId] = payload.run;
+    }
+    showToast("Stopped run profile");
+    await loadRunStatusesForActiveProject();
+    await loadRunLogsForGroup(groupId);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function ensureRunPolling() {
+  if (runState.pollId) {
+    clearInterval(runState.pollId);
+    runState.pollId = null;
+  }
+
+  runState.pollId = setInterval(async () => {
+    const project = getActiveProject();
+    if (!project || !project.isGit) return;
+
+    const logsExpanded = hasExpandedRunLogs();
+    await loadRunStatusesForActiveProject({ render: !logsExpanded });
+    const runningGroupIds = Object.values(runState.runsByGroupId)
+      .filter((run) => run && run.status === "running")
+      .map((run) => run.groupId);
+
+    for (const groupId of runningGroupIds) {
+      await loadRunLogsForGroup(groupId);
+    }
+    if (!logsExpanded) {
+      renderRunProfiles();
+    }
+  }, 2200);
 }
 
 function closeWorktreeMenu() {
@@ -1066,9 +1550,19 @@ function renderProjectDetails() {
     prState.items = [];
     prState.error = null;
     prSectionEl?.classList.add("hidden");
+    runState.defaultGroups = [];
+    runState.worktreeGroups = [];
+    runState.effectiveGroups = [];
+    runState.runsByGroupId = {};
+    runState.logCursorByGroupId = {};
+    runState.latestLogByGroupId = {};
+    runState.logLinesByGroupId = {};
+    closeRunLogModal();
+    runSectionEl?.classList.add("hidden");
     outgoingState.items = [];
     outgoingState.error = null;
     outgoingSectionEl?.classList.add("hidden");
+    renderRunProfiles();
     renderOutgoingList();
     renderPrList();
     if (changeProjectIconBtn) changeProjectIconBtn.disabled = true;
@@ -1094,6 +1588,7 @@ function renderProjectDetails() {
   } else {
     outgoingSectionEl?.classList.add("hidden");
   }
+  runSectionEl?.classList.remove("hidden");
   filesCountEl.textContent = project.changedFiles ? project.changedFiles.length : "0";
 
   let statusText = "Select a file";
@@ -1108,7 +1603,10 @@ function renderProjectDetails() {
     setDiffMessage("No diff available.");
     setActionButtonsState();
     prSectionEl?.classList.add("hidden");
+    runSectionEl?.classList.add("hidden");
     outgoingSectionEl?.classList.add("hidden");
+    closeRunLogModal();
+    renderRunProfiles();
     return;
   }
 
@@ -1251,6 +1749,8 @@ async function refreshActiveProject() {
 
 async function refreshAllActiveProjectData() {
   await refreshActiveProject();
+  await loadRunProfilesForActiveProject();
+  await loadRunStatusesForActiveProject();
   await loadOutgoingCommitsForActiveProject();
   await loadOpenPrsForActiveProject();
 }
@@ -1573,6 +2073,8 @@ function selectProject(projectPath) {
   renderProjects();
   renderProjectDetails();
   void refreshActiveProject();
+  void loadRunProfilesForActiveProject();
+  void loadRunStatusesForActiveProject();
   void loadOutgoingCommitsForActiveProject();
   void loadOpenPrsForActiveProject();
 }
@@ -1775,6 +2277,87 @@ prToggleBtn?.addEventListener("click", async () => {
   }
 });
 
+refreshRunsBtn?.addEventListener("click", async () => {
+  await loadRunProfilesForActiveProject();
+  await loadRunStatusesForActiveProject();
+});
+
+runToggleBtn?.addEventListener("click", () => {
+  toggleRunPanel();
+});
+
+addRunWorktreeBtn?.addEventListener("click", async () => {
+  openRunProfileModal("default");
+});
+
+addRunDefaultBtn?.addEventListener("click", async () => {
+  openRunProfileModal("default");
+});
+
+runProfileCancelBtn?.addEventListener("click", () => {
+  closeRunProfileModal();
+});
+
+runProfileSaveBtn?.addEventListener("click", async () => {
+  try {
+    const scope = runState.pendingCreateScope || "worktree";
+    const profile = buildRunProfileFromModal();
+    await addRunProfile(scope, profile);
+    closeRunProfileModal();
+  } catch (error) {
+    showToast(error.message || "Could not save run profile.", true);
+  }
+});
+
+runProfileCommandsInput?.addEventListener("keydown", async (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    runProfileSaveBtn?.click();
+  }
+});
+
+runProfileModalEl?.addEventListener("click", (event) => {
+  if (event.target === runProfileModalEl) {
+    closeRunProfileModal();
+  }
+});
+
+runLogCloseBtn?.addEventListener("click", () => {
+  closeRunLogModal();
+});
+
+runLogModalEl?.addEventListener("click", (event) => {
+  if (event.target === runLogModalEl) {
+    closeRunLogModal();
+  }
+});
+
+runListEl?.addEventListener("click", async (event) => {
+  const startButton = event.target.closest("button[data-run-start]");
+  if (startButton) {
+    await startRunProfile(decodeDataId(startButton.dataset.runStart));
+    return;
+  }
+
+  const stopButton = event.target.closest("button[data-run-stop]");
+  if (stopButton) {
+    await stopRunProfile(decodeDataId(stopButton.dataset.runStop));
+    return;
+  }
+
+  const logsButton = event.target.closest("button[data-run-logs]");
+  if (logsButton) {
+    await openRunLogModal(decodeDataId(logsButton.dataset.runLogs));
+    return;
+  }
+
+  const deleteButton = event.target.closest("button[data-run-delete]");
+  if (deleteButton) {
+    const index = Number(deleteButton.dataset.runDelete);
+    await deleteRunProfileAtIndex(index);
+  }
+});
+
 prListEl?.addEventListener("click", (event) => {
   const card = event.target.closest(".pr-item[data-pr-index]");
   if (!card) return;
@@ -1912,6 +2495,8 @@ function init() {
   setActionButtonsState();
   setOutgoingPanelExpanded(false);
   setPrPanelExpanded(false);
+  setRunPanelExpanded(false);
+  renderRunProfiles();
   renderOutgoingList();
   renderPrList();
 
@@ -1922,6 +2507,8 @@ function init() {
   }
 
   bindPullToRefresh();
+  bindRunLogTouchGuards();
+  ensureRunPolling();
 }
 
 // Mobile and layout interactivity bindings
