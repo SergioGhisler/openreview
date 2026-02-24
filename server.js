@@ -658,11 +658,14 @@ function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff, re
   const hasRecentSubjects = Boolean(recentSubjects);
   return [
     "You are a senior engineer preparing a commit.",
+    "Your task is to draft commit text only.",
+    "Do not execute git commands and do not propose pushing code.",
     "Analyze the staged git changes and return strict JSON only with this shape:",
     '{"commitMessage":"type(scope): short message","commitDescription":"line 1\\nline 2"}',
     "Rules:",
     "- commitMessage must be <= 72 chars, imperative mood, no trailing period.",
     "- commitMessage MUST use conventional commits (type(scope): msg or type: msg).",
+    "- use commit types like feat, fix, docs, refactor, test, chore, perf, build, ci.",
     "- commitDescription should explain intent and key impact in 2-4 short lines.",
     "- do not mention file counts, insertions/deletions, or diff stats.",
     hasRecentSubjects
@@ -779,9 +782,8 @@ async function runCommitAssistWithTimeout(projectPath, prompt, options) {
 
 function normalizeCommitAssistPayload(payload) {
   const commitMessage = String(payload?.commitMessage || "").trim();
-  const commitDescription = String(payload?.commitDescription || payload?.description || "")
-    .replace(/\r\n/g, "\n")
-    .trim();
+  const commitDescriptionRaw = String(payload?.commitDescription || payload?.description || "");
+  const commitDescription = normalizeCommitDescription(commitDescriptionRaw);
 
   if (!commitMessage) {
     const error = new Error("OpenCode returned an incomplete draft.");
@@ -799,6 +801,43 @@ function normalizeCommitAssistPayload(payload) {
     commitMessage: normalizedMessage.slice(0, 72),
     commitDescription: commitDescription.slice(0, COMMIT_ASSIST_DESCRIPTION_MAX_CHARS)
   };
+}
+
+function normalizeCommitDescription(value) {
+  const raw = String(value || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .replace(/([a-z])([A-Z])/g, "$1\n$2")
+    .trim();
+  if (!raw) return "";
+
+  let parts = raw
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-*•]\s+/, "").trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) {
+    const compact = parts[0] || raw;
+    const bulletParts = compact
+      .split(/\s+(?:[-*•]|\d+[.)])\s+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (bulletParts.length > 1) {
+      parts = bulletParts;
+    }
+  }
+
+  if (parts.length <= 1) {
+    const sentences = (parts[0] || raw)
+      .split(/(?<=[.!?])\s+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (sentences.length > 1) {
+      parts = sentences;
+    }
+  }
+
+  return parts.join("\n\n");
 }
 
 function extractOpencodeTextFromJsonStream(stdout) {
@@ -1049,7 +1088,7 @@ function buildCommitAssistFallback({ stagedFiles, stagedDiff }) {
 
   return {
     commitMessage: buildInsightBasedMessage(stagedFiles, insights).slice(0, 72),
-    commitDescription: descriptionLines.slice(0, COMMIT_ASSIST_SUMMARY_LIMIT).join("\n")
+    commitDescription: descriptionLines.slice(0, COMMIT_ASSIST_SUMMARY_LIMIT).join("\n\n")
   };
 }
 
