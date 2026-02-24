@@ -10,6 +10,8 @@ const MAX_PORT_FALLBACK_ATTEMPTS = 25;
 const RUN_PROFILE_STORE_PATH = path.join(os.homedir(), ".openreview-run-profiles.json");
 const RUN_LOG_LIMIT = 600;
 const RUN_FORCE_KILL_DELAY_MS = 2500;
+const COMMIT_ASSIST_DIFF_MAX_CHARS = 18000;
+const COMMIT_ASSIST_SUMMARY_LIMIT = 4;
 const runProfileStore = {
   loaded: false,
   data: { projects: {} }
@@ -645,6 +647,269 @@ function getMatchScore(name, fullPath, needleLower, fuzzyNeedleLower) {
   return 0;
 }
 
+function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) {
+  const filesText = stagedFiles.map((file) => `- ${file}`).join("\n");
+  return [
+    "You are a senior engineer preparing a commit.",
+    "Analyze the staged git changes and return strict JSON only with this shape:",
+    '{"summary":["bullet 1","bullet 2"],"commitMessage":"type(scope): short message"}',
+    "Rules:",
+    `- summary must contain 2-${COMMIT_ASSIST_SUMMARY_LIMIT} concise bullets focused on why/impact.`,
+    "- commitMessage must be <= 72 chars, imperative mood, no trailing period.",
+    "- commitMessage MUST use conventional commits (type(scope): msg or type: msg).",
+    "- return only one JSON object, no markdown, no extra keys.",
+    "- wrap the JSON object between these exact markers:",
+    "OC_JSON_START",
+    "OC_JSON_END",
+    "",
+    `Repository: ${repoName}`,
+    `Branch: ${branch || "unknown"}`,
+    "",
+    "Staged files:",
+    filesText,
+    "",
+    "Staged diff:",
+    stagedDiff
+  ].join("\n");
+}
+
+function normalizeCommitAssistPayload(payload) {
+  const summary = Array.isArray(payload?.summary)
+    ? payload.summary.map((item) => String(item || "").trim()).filter(Boolean).slice(0, COMMIT_ASSIST_SUMMARY_LIMIT)
+    : [];
+  const commitMessage = String(payload?.commitMessage || "").trim();
+
+  if (!summary.length || !commitMessage) {
+    const error = new Error("OpenCode returned an incomplete draft.");
+    error.status = 502;
+    throw error;
+  }
+
+  let normalizedMessage = commitMessage.replace(/\s+/g, " ").trim();
+  const conventionalPattern = /^[a-z]+(?:\([^)]+\))?!?:\s+.+/;
+  if (!conventionalPattern.test(normalizedMessage)) {
+    normalizedMessage = `chore: ${normalizedMessage.replace(/^[^a-z0-9]+/i, "")}`.trim();
+  }
+
+  return {
+    summary,
+    commitMessage: normalizedMessage.slice(0, 72)
+  };
+}
+
+function parseCommitAssistResponse(stdout) {
+  const text = String(stdout || "").trim();
+  if (!text) {
+    const error = new Error("OpenCode returned an empty response.");
+    error.status = 502;
+    throw error;
+  }
+
+  const normalizedText = text
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+
+  const markerPattern = /OC_JSON_START\s*([\s\S]*?)\s*OC_JSON_END/g;
+  const markerMatches = [...normalizedText.matchAll(markerPattern)];
+  for (let i = markerMatches.length - 1; i >= 0; i -= 1) {
+    const candidate = markerMatches[i]?.[1]?.trim();
+    if (!candidate) continue;
+    try {
+      return normalizeCommitAssistPayload(JSON.parse(candidate));
+    } catch {
+      // keep trying candidates
+    }
+  }
+
+  const jsonBlockMatch = normalizedText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (jsonBlockMatch?.[1]) {
+    try {
+      return normalizeCommitAssistPayload(JSON.parse(jsonBlockMatch[1].trim()));
+    } catch {
+      // continue with other parsers
+    }
+  }
+
+  try {
+    return normalizeCommitAssistPayload(JSON.parse(normalizedText));
+  } catch {
+    const start = normalizedText.indexOf("{");
+    const end = normalizedText.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        const extracted = normalizedText.slice(start, end + 1);
+        return normalizeCommitAssistPayload(JSON.parse(extracted));
+      } catch {
+        // fall through
+      }
+    }
+  }
+
+  const error = new Error("Could not parse OpenCode response.");
+  error.status = 502;
+  throw error;
+}
+
+function inferCommitType(files) {
+  if (!files.length) return "chore";
+
+  const lower = files.map((file) => file.toLowerCase());
+  const isDocs = lower.every((file) =>
+    file.endsWith(".md") || file.includes("/docs/") || file.startsWith("docs/") || file.endsWith(".txt")
+  );
+  if (isDocs) return "docs";
+
+  const isTests = lower.every((file) =>
+    file.includes("test") || file.includes("spec") || file.endsWith(".snap")
+  );
+  if (isTests) return "test";
+
+  const isUiOnly = lower.every((file) =>
+    file.startsWith("public/") || file.endsWith(".css") || file.endsWith(".html")
+  );
+  if (isUiOnly) return "feat";
+
+  if (lower.some((file) => file.includes("package-lock") || file === "package.json")) return "chore";
+  return "feat";
+}
+
+function inferCommitScope(files) {
+  if (!files.length) return "";
+  const counts = new Map();
+
+  files.forEach((file) => {
+    const clean = String(file || "").trim();
+    if (!clean) return;
+    const head = clean.includes("/") ? clean.split("/")[0] : path.parse(clean).name;
+    if (!head) return;
+    counts.set(head, (counts.get(head) || 0) + 1);
+  });
+
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const scope = String(sorted[0]?.[0] || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return scope;
+}
+
+function buildConventionalFallbackMessage(files) {
+  const type = inferCommitType(files);
+  const scope = inferCommitScope(files);
+  const subject = files.length === 1 ? `update ${path.basename(files[0])}` : "update staged changes";
+  return `${type}${scope ? `(${scope})` : ""}: ${subject}`.slice(0, 72);
+}
+
+function extractDiffInsights(stagedDiff) {
+  const lines = String(stagedDiff || "").split("\n");
+  const insights = [];
+  let currentFile = "";
+
+  const pushInsight = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    if (!insights.includes(text)) insights.push(text);
+  };
+
+  for (const line of lines) {
+    const fileMatch = line.match(/^\+\+\+\s+b\/(.+)$/);
+    if (fileMatch?.[1]) {
+      currentFile = fileMatch[1].trim();
+      continue;
+    }
+
+    if (!line.startsWith("+") || line.startsWith("+++")) continue;
+    const added = line.slice(1).trim();
+    if (!added) continue;
+
+    const routeMatch = added.match(/^app\.(get|post|put|delete|patch)\("([^"]+)"/);
+    if (routeMatch) {
+      pushInsight(`API: ${routeMatch[1].toUpperCase()} ${routeMatch[2]}`);
+      continue;
+    }
+
+    const functionMatch = added.match(/^(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
+    if (functionMatch?.[1]) {
+      pushInsight(`Logic: ${functionMatch[1]}()`);
+      continue;
+    }
+
+    if (currentFile.endsWith(".html")) {
+      const idMatch = added.match(/id="([^"]+)"/);
+      if (idMatch?.[1]) {
+        pushInsight(`UI: ${idMatch[1]}`);
+        continue;
+      }
+    }
+
+    if (currentFile.endsWith(".css")) {
+      const classMatch = added.match(/^\.([a-zA-Z0-9_-]+)/);
+      if (classMatch?.[1]) {
+        pushInsight(`Styles: .${classMatch[1]}`);
+        continue;
+      }
+    }
+  }
+
+  return insights.slice(0, 6);
+}
+
+function buildInsightBasedMessage(stagedFiles, insights) {
+  const joined = insights.join(" ").toLowerCase();
+  const filesLower = stagedFiles.map((file) => file.toLowerCase());
+  const touchedServer = filesLower.includes("server.js");
+  const touchedClient = filesLower.some((file) => file.startsWith("public/"));
+
+  if (joined.includes("/api/projects/commit-assist") || joined.includes("commit-draft") || joined.includes("commit-assist")) {
+    return "feat(commit): add opencode-assisted commit draft flow";
+  }
+  if (touchedServer && touchedClient) {
+    return "feat(commit): add commit summary and message assistant";
+  }
+  if (joined.includes("api:")) {
+    return "feat(api): update staged change assistance endpoint";
+  }
+  if (joined.includes("ui:")) {
+    return "feat(ui): add commit assistance modal";
+  }
+  return buildConventionalFallbackMessage(stagedFiles);
+}
+
+function buildCommitAssistFallback({ stagedFiles, stagedDiff }) {
+  const filesLower = stagedFiles.map((file) => file.toLowerCase());
+  const touchedServer = filesLower.includes("server.js");
+  const touchedApp = filesLower.includes("public/app.js");
+  const touchedHtml = filesLower.includes("public/index.html");
+  const touchedStyles = filesLower.includes("public/styles.css");
+  const hasCommitAssistRoute = String(stagedDiff || "").includes('/api/projects/commit-assist');
+  const hasCommitDraftUi = String(stagedDiff || "").includes("commit-draft");
+  const insights = extractDiffInsights(stagedDiff);
+  const summary = [];
+
+  if (hasCommitAssistRoute || (touchedServer && touchedApp)) {
+    summary.push("Adds an OpenCode-powered commit assistant for staged changes.");
+  }
+  if (hasCommitAssistRoute || touchedServer) {
+    summary.push("Introduces a backend endpoint that drafts change summary and a conventional commit message.");
+  }
+  if (hasCommitDraftUi || touchedHtml || touchedApp || touchedStyles) {
+    summary.push("Adds a commit draft modal so users can review, regenerate, and edit before committing.");
+  }
+
+  if (!summary.length && insights.length) {
+    summary.push(`Key changes include ${insights.slice(0, 2).join(" and ").toLowerCase()}.`);
+  }
+  if (!summary.length) {
+    summary.push("Updates staged changes and prepares a conventional commit message draft.");
+  }
+
+  return {
+    summary: summary.slice(0, COMMIT_ASSIST_SUMMARY_LIMIT),
+    commitMessage: buildInsightBasedMessage(stagedFiles, insights).slice(0, 72)
+  };
+}
+
 async function searchDirectories(query) {
   const { baseDir, needle, fuzzyNeedle } = splitSearchTarget(query);
   const needleLower = needle.toLowerCase();
@@ -774,6 +1039,70 @@ app.get("/api/projects/diff", async (req, res) => {
     res.json({ path: projectPath, file, diff: diff || "No diff output for this file." });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "Unexpected server error." });
+  }
+});
+
+app.post("/api/projects/commit-assist", async (req, res) => {
+  try {
+    const projectPath = await ensureDirectory(req.body?.path);
+    await ensureGitRepository(projectPath);
+
+    const [repoNameResult, branchResult, stagedFilesResult, stagedDiffResult] = await Promise.all([
+      runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: projectPath }),
+      runCommand("git", ["branch", "--show-current"], { cwd: projectPath }).catch(() => ({ stdout: "" })),
+      runCommand("git", ["diff", "--cached", "--name-only"], { cwd: projectPath }),
+      runCommand("git", ["diff", "--cached"], { cwd: projectPath })
+    ]);
+
+    const stagedFiles = String(stagedFilesResult.stdout || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (!stagedFiles.length) {
+      res.status(400).json({ error: "No staged changes to summarize." });
+      return;
+    }
+
+    const stagedDiffRaw = String(stagedDiffResult.stdout || "").trim();
+    const stagedDiff =
+      stagedDiffRaw.length > COMMIT_ASSIST_DIFF_MAX_CHARS
+        ? `${stagedDiffRaw.slice(0, COMMIT_ASSIST_DIFF_MAX_CHARS)}\n\n[Diff truncated for OpenCode prompt]`
+        : stagedDiffRaw;
+
+    const repoName = path.basename(String(repoNameResult.stdout || "").trim()) || path.basename(projectPath);
+    const branch = String(branchResult.stdout || "").trim() || "detached";
+    const prompt = buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff });
+
+    const opencodeResult = await runCommand("opencode", [prompt], { cwd: projectPath });
+    const draftOutput = String(opencodeResult.stdout || "").trim() || String(opencodeResult.stderr || "").trim();
+    let draft;
+    try {
+      draft = parseCommitAssistResponse(draftOutput);
+    } catch (error) {
+      if (error?.status === 502) {
+        draft = buildCommitAssistFallback({
+          stagedFiles,
+          stagedDiff: stagedDiffRaw
+        });
+      } else {
+        throw error;
+      }
+    }
+
+    res.json({
+      path: projectPath,
+      summary: draft.summary,
+      message: draft.commitMessage,
+      files: stagedFiles
+    });
+  } catch (error) {
+    const message = `${error.message || ""}\n${error.stderr || ""}`.toLowerCase();
+    if (error.code === "ENOENT" || message.includes("opencode: command not found")) {
+      res.status(400).json({ error: "OpenCode CLI is required (install and ensure `opencode` is in PATH)." });
+      return;
+    }
+    res.status(error.status || 500).json({ error: error.message || "Could not generate commit draft." });
   }
 });
 

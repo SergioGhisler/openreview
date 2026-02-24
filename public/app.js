@@ -63,6 +63,13 @@ const runLogModalEl = document.getElementById("run-log-modal");
 const runLogModalTitleEl = document.getElementById("run-log-modal-title");
 const runLogModalContentEl = document.getElementById("run-log-modal-content");
 const runLogCloseBtn = document.getElementById("run-log-close-btn");
+const commitDraftModalEl = document.getElementById("commit-draft-modal");
+const commitDraftStatusEl = document.getElementById("commit-draft-status");
+const commitDraftSummaryEl = document.getElementById("commit-draft-summary");
+const commitDraftMessageInput = document.getElementById("commit-draft-message");
+const commitDraftCancelBtn = document.getElementById("commit-draft-cancel-btn");
+const commitDraftRefreshBtn = document.getElementById("commit-draft-refresh-btn");
+const commitDraftCommitBtn = document.getElementById("commit-draft-commit-btn");
 
 const suggestionState = {
   visible: false,
@@ -81,7 +88,16 @@ const actionState = {
   committing: false,
   pulling: false,
   pushing: false,
-  creatingPr: false
+  creatingPr: false,
+  generatingCommitDraft: false
+};
+
+const commitDraftState = {
+  open: false,
+  summary: [],
+  message: "",
+  error: null,
+  files: []
 };
 
 const worktreeState = {
@@ -177,7 +193,8 @@ function setActionButtonsState() {
     actionState.committing ||
     actionState.pulling ||
     actionState.pushing ||
-    actionState.creatingPr;
+    actionState.creatingPr ||
+    actionState.generatingCommitDraft;
 
   refreshBtn.disabled = !project || busy;
   commitBtn.disabled = !isGitProject || stagedCount === 0 || busy;
@@ -834,6 +851,127 @@ function closeRunLogModal() {
   runLogModalEl?.classList.add("hidden");
   runLogModalEl?.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
+}
+
+function renderCommitDraftModal() {
+  if (!commitDraftModalEl) return;
+
+  const loading = actionState.generatingCommitDraft;
+  const hasError = Boolean(commitDraftState.error);
+  const hasSummary = commitDraftState.summary.length > 0;
+  const hasFiles = commitDraftState.files.length > 0;
+
+  if (commitDraftStatusEl) {
+    if (loading) {
+      commitDraftStatusEl.textContent = "Generating summary with OpenCode...";
+      commitDraftStatusEl.className = "commit-draft-status";
+    } else if (hasError) {
+      commitDraftStatusEl.textContent = commitDraftState.error;
+      commitDraftStatusEl.className = "commit-draft-status error";
+    } else if (hasFiles) {
+      commitDraftStatusEl.textContent = `Analyzed ${commitDraftState.files.length} staged file${commitDraftState.files.length === 1 ? "" : "s"}.`;
+      commitDraftStatusEl.className = "commit-draft-status";
+    } else {
+      commitDraftStatusEl.textContent = "";
+      commitDraftStatusEl.className = "commit-draft-status";
+    }
+  }
+
+  if (commitDraftSummaryEl) {
+    if (hasSummary) {
+      commitDraftSummaryEl.innerHTML = commitDraftState.summary
+        .map((line) => `<li>${escapeHtml(line)}</li>`)
+        .join("");
+      commitDraftSummaryEl.classList.remove("empty");
+    } else {
+      commitDraftSummaryEl.innerHTML = "<li>No summary generated yet.</li>";
+      commitDraftSummaryEl.classList.add("empty");
+    }
+  }
+
+  if (commitDraftMessageInput && commitDraftState.message !== commitDraftMessageInput.value) {
+    commitDraftMessageInput.value = commitDraftState.message;
+  }
+
+  if (commitDraftRefreshBtn) {
+    commitDraftRefreshBtn.disabled = loading;
+  }
+
+  if (commitDraftCommitBtn) {
+    const cleanMessage = String(commitDraftMessageInput?.value || "").trim();
+    commitDraftCommitBtn.disabled = loading || !cleanMessage || actionState.committing;
+  }
+}
+
+function openCommitDraftModal() {
+  commitDraftState.open = true;
+  commitDraftModalEl?.classList.remove("hidden");
+  commitDraftModalEl?.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  renderCommitDraftModal();
+}
+
+function closeCommitDraftModal() {
+  commitDraftState.open = false;
+  commitDraftModalEl?.classList.add("hidden");
+  commitDraftModalEl?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("modal-open");
+}
+
+async function generateCommitDraftForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.generatingCommitDraft) return;
+
+  actionState.generatingCommitDraft = true;
+  commitDraftState.error = null;
+  setActionButtonsState();
+  renderCommitDraftModal();
+
+  try {
+    const response = await fetch("/api/projects/commit-assist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: project.path })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not generate commit draft.");
+
+    commitDraftState.summary = Array.isArray(payload.summary) ? payload.summary : [];
+    commitDraftState.message = String(payload.message || "").trim();
+    commitDraftState.files = Array.isArray(payload.files) ? payload.files : [];
+    commitDraftState.error = null;
+  } catch (error) {
+    commitDraftState.summary = [];
+    commitDraftState.files = [];
+    commitDraftState.error = error.message || "Could not generate commit draft.";
+  } finally {
+    actionState.generatingCommitDraft = false;
+    setActionButtonsState();
+    renderCommitDraftModal();
+    if (commitDraftState.open) {
+      commitDraftMessageInput?.focus();
+      commitDraftMessageInput?.select();
+    }
+  }
+}
+
+async function openCommitDraftForActiveProject() {
+  const project = getActiveProject();
+  if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
+
+  const { stagedCount } = getProjectStageStats(project);
+  if (stagedCount < 1) {
+    showToast("Stage files before committing.", true);
+    return;
+  }
+
+  commitDraftState.summary = [];
+  commitDraftState.message = "";
+  commitDraftState.error = null;
+  commitDraftState.files = [];
+
+  openCommitDraftModal();
+  await generateCommitDraftForActiveProject();
 }
 
 let runLogTouchStartY = 0;
@@ -1889,13 +2027,11 @@ async function stageAllActiveProject() {
   }
 }
 
-async function commitActiveProject() {
+async function commitActiveProject(messageInput) {
   const project = getActiveProject();
   if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
 
-  const message = window.prompt("Commit message:");
-  if (message === null) return;
-  const cleanMessage = message.trim();
+  const cleanMessage = String(messageInput || "").trim();
   if (!cleanMessage) {
     showToast("Commit message is required.", true);
     return;
@@ -1903,6 +2039,7 @@ async function commitActiveProject() {
 
   actionState.committing = true;
   setActionButtonsState();
+  renderCommitDraftModal();
 
   try {
     const response = await fetch("/api/projects/commit", {
@@ -1923,6 +2060,7 @@ async function commitActiveProject() {
     setDiffMessage("Pick a file to inspect its diff.");
     renderProjects();
     renderProjectDetails();
+    closeCommitDraftModal();
     showToast(`Committed ${payload.hash}`);
     void loadOutgoingCommitsForActiveProject();
   } catch (error) {
@@ -1930,6 +2068,7 @@ async function commitActiveProject() {
   } finally {
     actionState.committing = false;
     setActionButtonsState();
+    renderCommitDraftModal();
   }
 }
 
@@ -2247,7 +2386,7 @@ refreshBtn.addEventListener("click", async () => {
 });
 
 commitBtn.addEventListener("click", async () => {
-  await commitActiveProject();
+  await openCommitDraftForActiveProject();
 });
 
 pushBtn.addEventListener("click", async () => {
@@ -2338,6 +2477,36 @@ runLogCloseBtn?.addEventListener("click", () => {
 runLogModalEl?.addEventListener("click", (event) => {
   if (event.target === runLogModalEl) {
     closeRunLogModal();
+  }
+});
+
+commitDraftCancelBtn?.addEventListener("click", () => {
+  closeCommitDraftModal();
+});
+
+commitDraftRefreshBtn?.addEventListener("click", async () => {
+  await generateCommitDraftForActiveProject();
+});
+
+commitDraftMessageInput?.addEventListener("input", () => {
+  commitDraftState.message = String(commitDraftMessageInput.value || "");
+  renderCommitDraftModal();
+});
+
+commitDraftMessageInput?.addEventListener("keydown", async (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    commitDraftCommitBtn?.click();
+  }
+});
+
+commitDraftCommitBtn?.addEventListener("click", async () => {
+  await commitActiveProject(commitDraftMessageInput?.value || "");
+});
+
+commitDraftModalEl?.addEventListener("click", (event) => {
+  if (event.target === commitDraftModalEl) {
+    closeCommitDraftModal();
   }
 });
 

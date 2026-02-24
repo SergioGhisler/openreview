@@ -208,6 +208,24 @@
         <pre id="run-log-modal-content" class="run-log-modal-content">No logs yet.</pre>
       </div>
     </div>
+
+    <div id="commit-draft-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="commit-draft-modal-title">
+        <h3 id="commit-draft-modal-title">Commit With OpenCode</h3>
+        <p id="commit-draft-status" class="commit-draft-status">Generating summary with OpenCode...</p>
+        <label class="modal-label" for="commit-draft-summary">Change Summary</label>
+        <ul id="commit-draft-summary" class="commit-draft-summary empty">
+          <li>No summary generated yet.</li>
+        </ul>
+        <label class="modal-label" for="commit-draft-message">Suggested Commit Message</label>
+        <textarea id="commit-draft-message" rows="3" placeholder="feat: describe the staged change"></textarea>
+        <div class="modal-actions commit-draft-actions">
+          <button id="commit-draft-cancel-btn" type="button" class="secondary-btn">Cancel</button>
+          <button id="commit-draft-refresh-btn" type="button" class="secondary-btn">Regenerate</button>
+          <button id="commit-draft-commit-btn" type="button" class="primary-btn">Commit</button>
+        </div>
+      </div>
+    </div>
     
     <!-- Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
