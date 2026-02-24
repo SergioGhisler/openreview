@@ -1,0 +1,9 @@
+{
+  "commitAssist": {
+    "agent": "plan",
+    "model": "github-copilot/grok-code-fast-1",
+    "variant": "",
+    "timeoutMs": 9000,
+    "diffMaxChars": 9000
+  }
+}

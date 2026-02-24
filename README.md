@@ -23,3 +23,32 @@ Then open `http://localhost:5050`.
 
 - This app is intended for local use on your machine.
 - Folder opening is path-based (paste absolute path).
+
+## Commit Assist Model Configuration
+
+For commit drafting, each target repository can define OpenCode settings in either:
+
+- `.openreview.json`
+- `openreview.config.json`
+
+Use `.openreview.json.example` in this project as a template.
+
+Example:
+
+```json
+{
+  "commitAssist": {
+    "agent": "plan",
+    "model": "openai/gpt-5.3-codex",
+    "variant": "high",
+    "timeoutMs": 9000,
+    "diffMaxChars": 9000
+  }
+}
+```
+
+Notes:
+
+- `agent` defaults to `plan`.
+- `model` is optional; if omitted, OpenCode uses its configured default model.
+- `timeoutMs` and `diffMaxChars` are optional tuning knobs.

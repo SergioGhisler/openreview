@@ -65,8 +65,8 @@ const runLogModalContentEl = document.getElementById("run-log-modal-content");
 const runLogCloseBtn = document.getElementById("run-log-close-btn");
 const commitDraftModalEl = document.getElementById("commit-draft-modal");
 const commitDraftStatusEl = document.getElementById("commit-draft-status");
-const commitDraftSummaryEl = document.getElementById("commit-draft-summary");
 const commitDraftMessageInput = document.getElementById("commit-draft-message");
+const commitDraftDescriptionInput = document.getElementById("commit-draft-description");
 const commitDraftCancelBtn = document.getElementById("commit-draft-cancel-btn");
 const commitDraftRefreshBtn = document.getElementById("commit-draft-refresh-btn");
 const commitDraftCommitBtn = document.getElementById("commit-draft-commit-btn");
@@ -94,8 +94,8 @@ const actionState = {
 
 const commitDraftState = {
   open: false,
-  summary: [],
   message: "",
+  description: "",
   error: null,
   files: []
 };
@@ -858,12 +858,11 @@ function renderCommitDraftModal() {
 
   const loading = actionState.generatingCommitDraft;
   const hasError = Boolean(commitDraftState.error);
-  const hasSummary = commitDraftState.summary.length > 0;
   const hasFiles = commitDraftState.files.length > 0;
 
   if (commitDraftStatusEl) {
     if (loading) {
-      commitDraftStatusEl.textContent = "Generating summary with OpenCode...";
+      commitDraftStatusEl.textContent = "Generating commit draft with OpenCode...";
       commitDraftStatusEl.className = "commit-draft-status";
     } else if (hasError) {
       commitDraftStatusEl.textContent = commitDraftState.error;
@@ -877,20 +876,12 @@ function renderCommitDraftModal() {
     }
   }
 
-  if (commitDraftSummaryEl) {
-    if (hasSummary) {
-      commitDraftSummaryEl.innerHTML = commitDraftState.summary
-        .map((line) => `<li>${escapeHtml(line)}</li>`)
-        .join("");
-      commitDraftSummaryEl.classList.remove("empty");
-    } else {
-      commitDraftSummaryEl.innerHTML = "<li>No summary generated yet.</li>";
-      commitDraftSummaryEl.classList.add("empty");
-    }
-  }
-
   if (commitDraftMessageInput && commitDraftState.message !== commitDraftMessageInput.value) {
     commitDraftMessageInput.value = commitDraftState.message;
+  }
+
+  if (commitDraftDescriptionInput && commitDraftState.description !== commitDraftDescriptionInput.value) {
+    commitDraftDescriptionInput.value = commitDraftState.description;
   }
 
   if (commitDraftRefreshBtn) {
@@ -936,12 +927,12 @@ async function generateCommitDraftForActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not generate commit draft.");
 
-    commitDraftState.summary = Array.isArray(payload.summary) ? payload.summary : [];
     commitDraftState.message = String(payload.message || "").trim();
+    commitDraftState.description = String(payload.description || "").trim();
     commitDraftState.files = Array.isArray(payload.files) ? payload.files : [];
     commitDraftState.error = null;
   } catch (error) {
-    commitDraftState.summary = [];
+    commitDraftState.description = "";
     commitDraftState.files = [];
     commitDraftState.error = error.message || "Could not generate commit draft.";
   } finally {
@@ -965,8 +956,8 @@ async function openCommitDraftForActiveProject() {
     return;
   }
 
-  commitDraftState.summary = [];
   commitDraftState.message = "";
+  commitDraftState.description = "";
   commitDraftState.error = null;
   commitDraftState.files = [];
 
@@ -2027,11 +2018,12 @@ async function stageAllActiveProject() {
   }
 }
 
-async function commitActiveProject(messageInput) {
+async function commitActiveProject(messageInput, descriptionInput) {
   const project = getActiveProject();
   if (!project || !project.isGit || actionState.committing || actionState.pulling || actionState.pushing) return;
 
   const cleanMessage = String(messageInput || "").trim();
+  const cleanDescription = String(descriptionInput || "").trim();
   if (!cleanMessage) {
     showToast("Commit message is required.", true);
     return;
@@ -2045,7 +2037,11 @@ async function commitActiveProject(messageInput) {
     const response = await fetch("/api/projects/commit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: project.path, message: cleanMessage })
+      body: JSON.stringify({
+        path: project.path,
+        message: cleanMessage,
+        description: cleanDescription
+      })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not commit changes.");
@@ -2493,6 +2489,10 @@ commitDraftMessageInput?.addEventListener("input", () => {
   renderCommitDraftModal();
 });
 
+commitDraftDescriptionInput?.addEventListener("input", () => {
+  commitDraftState.description = String(commitDraftDescriptionInput.value || "");
+});
+
 commitDraftMessageInput?.addEventListener("keydown", async (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
@@ -2500,8 +2500,18 @@ commitDraftMessageInput?.addEventListener("keydown", async (event) => {
   }
 });
 
+commitDraftDescriptionInput?.addEventListener("keydown", async (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    commitDraftCommitBtn?.click();
+  }
+});
+
 commitDraftCommitBtn?.addEventListener("click", async () => {
-  await commitActiveProject(commitDraftMessageInput?.value || "");
+  await commitActiveProject(
+    commitDraftMessageInput?.value || "",
+    commitDraftDescriptionInput?.value || ""
+  );
 });
 
 commitDraftModalEl?.addEventListener("click", (event) => {

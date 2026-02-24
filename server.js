@@ -10,8 +10,11 @@ const MAX_PORT_FALLBACK_ATTEMPTS = 25;
 const RUN_PROFILE_STORE_PATH = path.join(os.homedir(), ".openreview-run-profiles.json");
 const RUN_LOG_LIMIT = 600;
 const RUN_FORCE_KILL_DELAY_MS = 2500;
-const COMMIT_ASSIST_DIFF_MAX_CHARS = 18000;
+const COMMIT_ASSIST_DIFF_MAX_CHARS = 9000;
 const COMMIT_ASSIST_SUMMARY_LIMIT = 4;
+const COMMIT_ASSIST_DESCRIPTION_MAX_CHARS = 1200;
+const COMMIT_ASSIST_TIMEOUT_MS = 9000;
+const COMMIT_ASSIST_DEFAULT_AGENT = "plan";
 const runProfileStore = {
   loaded: false,
   data: { projects: {} }
@@ -652,11 +655,12 @@ function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) 
   return [
     "You are a senior engineer preparing a commit.",
     "Analyze the staged git changes and return strict JSON only with this shape:",
-    '{"summary":["bullet 1","bullet 2"],"commitMessage":"type(scope): short message"}',
+    '{"commitMessage":"type(scope): short message","commitDescription":"line 1\\nline 2"}',
     "Rules:",
-    `- summary must contain 2-${COMMIT_ASSIST_SUMMARY_LIMIT} concise bullets focused on why/impact.`,
     "- commitMessage must be <= 72 chars, imperative mood, no trailing period.",
     "- commitMessage MUST use conventional commits (type(scope): msg or type: msg).",
+    "- commitDescription should explain intent and key impact in 2-4 short lines.",
+    "- do not mention file counts, insertions/deletions, or diff stats.",
     "- return only one JSON object, no markdown, no extra keys.",
     "- wrap the JSON object between these exact markers:",
     "OC_JSON_START",
@@ -673,13 +677,89 @@ function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) 
   ].join("\n");
 }
 
-function normalizeCommitAssistPayload(payload) {
-  const summary = Array.isArray(payload?.summary)
-    ? payload.summary.map((item) => String(item || "").trim()).filter(Boolean).slice(0, COMMIT_ASSIST_SUMMARY_LIMIT)
-    : [];
-  const commitMessage = String(payload?.commitMessage || "").trim();
+function clampInt(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
 
-  if (!summary.length || !commitMessage) {
+function normalizeCommitAssistConfig(rawConfig) {
+  const defaults = {
+    agent: COMMIT_ASSIST_DEFAULT_AGENT,
+    model: "",
+    variant: "",
+    timeoutMs: COMMIT_ASSIST_TIMEOUT_MS,
+    diffMaxChars: COMMIT_ASSIST_DIFF_MAX_CHARS
+  };
+
+  const commitAssist =
+    rawConfig?.commitAssist && typeof rawConfig.commitAssist === "object" ? rawConfig.commitAssist : rawConfig;
+  if (!commitAssist || typeof commitAssist !== "object") return defaults;
+
+  const agentInput = String(commitAssist.agent || "").trim();
+  const modelInput = String(commitAssist.model || "").trim();
+  const variantInput = String(commitAssist.variant || "").trim();
+
+  return {
+    agent: agentInput || defaults.agent,
+    model: modelInput,
+    variant: variantInput,
+    timeoutMs: clampInt(commitAssist.timeoutMs, 3000, 45000, defaults.timeoutMs),
+    diffMaxChars: clampInt(commitAssist.diffMaxChars, 3000, 30000, defaults.diffMaxChars)
+  };
+}
+
+async function readProjectCommitAssistConfig(projectPath) {
+  const candidates = [
+    path.join(projectPath, ".openreview.json"),
+    path.join(projectPath, "openreview.config.json")
+  ];
+
+  for (const filePath of candidates) {
+    const raw = await fs.readFile(filePath, "utf8").catch(() => "");
+    if (!raw.trim()) continue;
+    try {
+      return normalizeCommitAssistConfig(JSON.parse(raw));
+    } catch {
+      return normalizeCommitAssistConfig(null);
+    }
+  }
+
+  return normalizeCommitAssistConfig(null);
+}
+
+async function runCommitAssistWithTimeout(projectPath, prompt, options) {
+  const timeoutMs = Number(options?.timeoutMs) || COMMIT_ASSIST_TIMEOUT_MS;
+  const args = ["run", "--agent", options?.agent || COMMIT_ASSIST_DEFAULT_AGENT, "--format", "json"];
+  if (options?.model) {
+    args.push("--model", options.model);
+  }
+  if (options?.variant) {
+    args.push("--variant", options.variant);
+  }
+  args.push(prompt);
+
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve(null), timeoutMs);
+  });
+
+  const commandPromise = runCommand("opencode", args, { cwd: projectPath })
+    .then((result) => result)
+    .catch((error) => ({ error }));
+
+  const result = await Promise.race([commandPromise, timeoutPromise]);
+  if (!result) return { timedOut: true };
+  if (result.error) throw result.error;
+  return { timedOut: false, result };
+}
+
+function normalizeCommitAssistPayload(payload) {
+  const commitMessage = String(payload?.commitMessage || "").trim();
+  const commitDescription = String(payload?.commitDescription || payload?.description || "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+
+  if (!commitMessage) {
     const error = new Error("OpenCode returned an incomplete draft.");
     error.status = 502;
     throw error;
@@ -692,13 +772,34 @@ function normalizeCommitAssistPayload(payload) {
   }
 
   return {
-    summary,
-    commitMessage: normalizedMessage.slice(0, 72)
+    commitMessage: normalizedMessage.slice(0, 72),
+    commitDescription: commitDescription.slice(0, COMMIT_ASSIST_DESCRIPTION_MAX_CHARS)
   };
 }
 
+function extractOpencodeTextFromJsonStream(stdout) {
+  const raw = String(stdout || "").trim();
+  if (!raw) return "";
+
+  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+  const textParts = [];
+
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "text" && typeof event?.part?.text === "string") {
+        textParts.push(event.part.text);
+      }
+    } catch {
+      return raw;
+    }
+  }
+
+  return textParts.length ? textParts.join("\n").trim() : raw;
+}
+
 function parseCommitAssistResponse(stdout) {
-  const text = String(stdout || "").trim();
+  const text = extractOpencodeTextFromJsonStream(stdout);
   if (!text) {
     const error = new Error("OpenCode returned an empty response.");
     error.status = 502;
@@ -884,29 +985,47 @@ function buildCommitAssistFallback({ stagedFiles, stagedDiff }) {
   const touchedStyles = filesLower.includes("public/styles.css");
   const hasCommitAssistRoute = String(stagedDiff || "").includes('/api/projects/commit-assist');
   const hasCommitDraftUi = String(stagedDiff || "").includes("commit-draft");
+  const hasCommitDescription = String(stagedDiff || "").includes("commit-draft-description");
   const insights = extractDiffInsights(stagedDiff);
-  const summary = [];
+  const descriptionLines = [];
+  const apiInsight = insights.find((line) => line.startsWith("API:"));
+  const uiInsight = insights.find((line) => line.startsWith("UI:"));
+  const logicInsights = insights.filter((line) => line.startsWith("Logic:")).slice(0, 2);
 
   if (hasCommitAssistRoute || (touchedServer && touchedApp)) {
-    summary.push("Adds an OpenCode-powered commit assistant for staged changes.");
+    descriptionLines.push(
+      apiInsight
+        ? `Add OpenCode-powered commit drafting in ${apiInsight.replace("API: ", "")}.`
+        : "Add OpenCode-powered commit drafting for staged changes."
+    );
   }
   if (hasCommitAssistRoute || touchedServer) {
-    summary.push("Introduces a backend endpoint that drafts change summary and a conventional commit message.");
+    descriptionLines.push("Generate both a conventional commit subject and an editable commit body.");
   }
-  if (hasCommitDraftUi || touchedHtml || touchedApp || touchedStyles) {
-    summary.push("Adds a commit draft modal so users can review, regenerate, and edit before committing.");
+  if (hasCommitDraftUi || touchedHtml || touchedApp || touchedStyles || hasCommitDescription) {
+    descriptionLines.push(
+      uiInsight
+        ? `Update the commit modal UI (${uiInsight.replace("UI: ", "")}) to review and edit draft content.`
+        : "Update the commit modal to review, regenerate, and edit draft content before committing."
+    );
+  }
+  if (hasCommitDescription) {
+    descriptionLines.push("Include commit description text in the final git commit body.");
+  }
+  if (logicInsights.length) {
+    descriptionLines.push(`Wire drafting flow through ${logicInsights.map((line) => line.replace("Logic: ", "")).join(" and ")}.`);
   }
 
-  if (!summary.length && insights.length) {
-    summary.push(`Key changes include ${insights.slice(0, 2).join(" and ").toLowerCase()}.`);
+  if (!descriptionLines.length && insights.length) {
+    descriptionLines.push(`Key updates include ${insights.slice(0, 2).join(" and ").toLowerCase()}.`);
   }
-  if (!summary.length) {
-    summary.push("Updates staged changes and prepares a conventional commit message draft.");
+  if (!descriptionLines.length) {
+    descriptionLines.push("Update commit workflow to provide an editable conventional commit draft.");
   }
 
   return {
-    summary: summary.slice(0, COMMIT_ASSIST_SUMMARY_LIMIT),
-    commitMessage: buildInsightBasedMessage(stagedFiles, insights).slice(0, 72)
+    commitMessage: buildInsightBasedMessage(stagedFiles, insights).slice(0, 72),
+    commitDescription: descriptionLines.slice(0, COMMIT_ASSIST_SUMMARY_LIMIT).join("\n")
   };
 }
 
@@ -1046,6 +1165,7 @@ app.post("/api/projects/commit-assist", async (req, res) => {
   try {
     const projectPath = await ensureDirectory(req.body?.path);
     await ensureGitRepository(projectPath);
+    const commitAssistConfig = await readProjectCommitAssistConfig(projectPath);
 
     const [repoNameResult, branchResult, stagedFilesResult, stagedDiffResult] = await Promise.all([
       runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: projectPath }),
@@ -1065,35 +1185,50 @@ app.post("/api/projects/commit-assist", async (req, res) => {
     }
 
     const stagedDiffRaw = String(stagedDiffResult.stdout || "").trim();
+    const maxDiffChars = Number(commitAssistConfig.diffMaxChars) || COMMIT_ASSIST_DIFF_MAX_CHARS;
     const stagedDiff =
-      stagedDiffRaw.length > COMMIT_ASSIST_DIFF_MAX_CHARS
-        ? `${stagedDiffRaw.slice(0, COMMIT_ASSIST_DIFF_MAX_CHARS)}\n\n[Diff truncated for OpenCode prompt]`
+      stagedDiffRaw.length > maxDiffChars
+        ? `${stagedDiffRaw.slice(0, maxDiffChars)}\n\n[Diff truncated for OpenCode prompt]`
         : stagedDiffRaw;
 
     const repoName = path.basename(String(repoNameResult.stdout || "").trim()) || path.basename(projectPath);
     const branch = String(branchResult.stdout || "").trim() || "detached";
     const prompt = buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff });
+    const fallbackDraft = buildCommitAssistFallback({ stagedFiles, stagedDiff: stagedDiffRaw });
 
-    const opencodeResult = await runCommand("opencode", [prompt], { cwd: projectPath });
-    const draftOutput = String(opencodeResult.stdout || "").trim() || String(opencodeResult.stderr || "").trim();
+    const assistResult = await runCommitAssistWithTimeout(projectPath, prompt, commitAssistConfig);
+
+    if (assistResult.timedOut) {
+      res.json({
+        path: projectPath,
+        message: fallbackDraft.commitMessage,
+        description: fallbackDraft.commitDescription,
+        files: stagedFiles
+      });
+      return;
+    }
+
+    const draftOutput =
+      String(assistResult.result.stdout || "").trim() || String(assistResult.result.stderr || "").trim();
     let draft;
     try {
       draft = parseCommitAssistResponse(draftOutput);
     } catch (error) {
       if (error?.status === 502) {
-        draft = buildCommitAssistFallback({
-          stagedFiles,
-          stagedDiff: stagedDiffRaw
-        });
+        draft = fallbackDraft;
       } else {
         throw error;
       }
     }
 
+    if (!String(draft?.commitDescription || "").trim()) {
+      draft.commitDescription = fallbackDraft.commitDescription;
+    }
+
     res.json({
       path: projectPath,
-      summary: draft.summary,
       message: draft.commitMessage,
+      description: draft.commitDescription || "",
       files: stagedFiles
     });
   } catch (error) {
@@ -1110,6 +1245,7 @@ app.post("/api/projects/commit", async (req, res) => {
   try {
     const projectPath = await ensureDirectory(req.body?.path);
     const message = String(req.body?.message || "").trim();
+    const description = String(req.body?.description || "").trim();
 
     if (!message) {
       res.status(400).json({ error: "Commit message is required." });
@@ -1127,7 +1263,11 @@ app.post("/api/projects/commit", async (req, res) => {
       return;
     }
 
-    await runCommand("git", ["commit", "-m", message], { cwd: projectPath });
+    const commitArgs = ["commit", "-m", message];
+    if (description) {
+      commitArgs.push("-m", description);
+    }
+    await runCommand("git", commitArgs, { cwd: projectPath });
     const commitRef = await runCommand("git", ["rev-parse", "--short", "HEAD"], { cwd: projectPath });
     const snapshot = await getProjectSnapshot(projectPath);
 

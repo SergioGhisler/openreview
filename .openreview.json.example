@@ -1,0 +1,9 @@
+{
+  "commitAssist": {
+    "agent": "plan",
+    "model": "openai/gpt-5.3-codex",
+    "variant": "high",
+    "timeoutMs": 9000,
+    "diffMaxChars": 9000
+  }
+}
