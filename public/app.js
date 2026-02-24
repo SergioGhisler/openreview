@@ -7,6 +7,7 @@ const state = {
 };
 
 const projectListEl = document.getElementById("project-list");
+const sidebarEl = document.getElementById("sidebar");
 const mainContentEl = document.querySelector(".main-content");
 const filesListEl = document.getElementById("files-list");
 const diffViewerEl = document.getElementById("diff-viewer");
@@ -285,6 +286,7 @@ function openSidebar() {
 
 function closeSidebar() {
   document.body.classList.remove("show-sidebar");
+  closeProjectPicker();
   unlockBodyScroll();
 }
 
@@ -840,6 +842,17 @@ function closeProjectSuggestions() {
   }
   projectSuggestionsEl.classList.remove("visible");
   projectSuggestionsEl.innerHTML = "";
+}
+
+function openProjectPicker() {
+  sidebarEl?.classList.add("show-project-picker");
+  projectPathInput.focus();
+  showProjectSuggestions();
+}
+
+function closeProjectPicker() {
+  sidebarEl?.classList.remove("show-project-picker");
+  closeProjectSuggestions();
 }
 
 function renderProjectSuggestions() {
@@ -1605,6 +1618,7 @@ openProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   closeProjectSuggestions();
   await openProject(projectPathInput.value);
+  closeProjectPicker();
 });
 
 function setActiveProjectIcon(file) {
@@ -1714,8 +1728,7 @@ projectIconInput?.addEventListener("change", (event) => {
 });
 
 addSavedProjectBtn?.addEventListener("click", () => {
-  projectPathInput.focus();
-  showProjectSuggestions();
+  openProjectPicker();
 });
 
 refreshBtn.addEventListener("click", async () => {
