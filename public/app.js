@@ -1476,6 +1476,23 @@ function getProjectInitial(project) {
   return title[0].toUpperCase();
 }
 
+function getProjectIconStyle(projectPath) {
+  const value = String(projectPath || "");
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  const hue = (hash * 137.508) % 360;
+  const saturation = 62 + (hash % 14);
+  const lightness = 58 + ((hash >> 3) % 10);
+  const background = `hsla(${hue.toFixed(1)}, ${saturation}%, ${lightness}%, 0.2)`;
+  const border = `hsla(${hue.toFixed(1)}, ${Math.min(92, saturation + 8)}%, ${Math.min(82, lightness + 8)}%, 0.42)`;
+  const text = `hsl(${hue.toFixed(1)}, ${Math.min(96, saturation + 10)}%, ${Math.min(88, lightness + 18)}%)`;
+
+  return `--project-icon-bg:${background};--project-icon-border:${border};--project-icon-fg:${text};`;
+}
+
 function renderProjects() {
   if (!state.projects.length) {
     projectListEl.innerHTML = '<p class="saved-projects-empty">No saved projects.</p>';
@@ -1498,7 +1515,7 @@ function renderProjects() {
           title="${escapeHtml(title)}"
           aria-label="Open saved project ${escapeHtml(title)}"
         >
-          <span class="project-icon-shell">
+          <span class="project-icon-shell" style="${getProjectIconStyle(project.path)}">
             ${iconMarkup}
           </span>
           <span class="project-folder-name">${escapeHtml(title)}</span>

@@ -438,8 +438,9 @@ input:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--project-icon-border, rgba(255, 255, 255, 0.14));
+  background: var(--project-icon-bg, rgba(255, 255, 255, 0.04));
+  color: var(--project-icon-fg, var(--text-main));
   flex-shrink: 0;
 }
 
@@ -452,7 +453,7 @@ input:focus {
 .project-icon-initial {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--text-main);
+  color: currentColor;
 }
 
 .project-folder-name {
