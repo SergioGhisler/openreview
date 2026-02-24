@@ -433,12 +433,13 @@ input:focus {
   width: 2.2rem;
   height: 2.2rem;
   position: relative;
-  border-radius: 0.8rem;
+  border-radius: 0.65rem;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
 }
 
@@ -449,9 +450,9 @@ input:focus {
 }
 
 .project-icon-initial {
-  font-size: 1rem;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-main);
 }
 
 .project-folder-name {
@@ -465,14 +466,6 @@ input:focus {
   max-width: 100%;
   text-align: left;
 }
-
-.project-icon-shell.color-indigo { background: linear-gradient(155deg, #4f46e5, #312e81); }
-.project-icon-shell.color-sky { background: linear-gradient(155deg, #0ea5e9, #0c4a6e); }
-.project-icon-shell.color-emerald { background: linear-gradient(155deg, #10b981, #064e3b); }
-.project-icon-shell.color-amber { background: linear-gradient(155deg, #f59e0b, #78350f); }
-.project-icon-shell.color-rose { background: linear-gradient(155deg, #f43f5e, #881337); }
-.project-icon-shell.color-violet { background: linear-gradient(155deg, #8b5cf6, #4c1d95); }
-.project-icon-shell.color-cyan { background: linear-gradient(155deg, #06b6d4, #164e63); }
 
 .project-change-badge {
   position: absolute;
