@@ -1476,16 +1476,6 @@ function getProjectInitial(project) {
   return title[0].toUpperCase();
 }
 
-function getProjectColorToken(projectPath) {
-  const palette = ["indigo", "sky", "emerald", "amber", "rose", "violet", "cyan"];
-  const value = String(projectPath || "");
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return palette[hash % palette.length];
-}
-
 function renderProjects() {
   if (!state.projects.length) {
     projectListEl.innerHTML = '<p class="saved-projects-empty">No saved projects.</p>';
@@ -1508,7 +1498,7 @@ function renderProjects() {
           title="${escapeHtml(title)}"
           aria-label="Open saved project ${escapeHtml(title)}"
         >
-          <span class="project-icon-shell color-${getProjectColorToken(project.path)}">
+          <span class="project-icon-shell">
             ${iconMarkup}
           </span>
           <span class="project-folder-name">${escapeHtml(title)}</span>
