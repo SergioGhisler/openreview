@@ -40,9 +40,10 @@ Example:
   "commitAssist": {
     "agent": "plan",
     "model": "openai/gpt-5.3-codex",
-    "variant": "high",
+    "variant": "low",
     "timeoutMs": 9000,
-    "diffMaxChars": 9000
+    "diffMaxChars": 9000,
+    "historyCount": 12
   }
 }
 ```
@@ -51,4 +52,5 @@ Notes:
 
 - `agent` defaults to `plan`.
 - `model` is optional; if omitted, OpenCode uses its configured default model.
+- `historyCount` controls how many recent commit subjects are included as style guidance (0 disables it).
 - `timeoutMs` and `diffMaxChars` are optional tuning knobs.

@@ -650,8 +650,12 @@ function getMatchScore(name, fullPath, needleLower, fuzzyNeedleLower) {
   return 0;
 }
 
-function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) {
+function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff, recentCommitSubjects }) {
   const filesText = stagedFiles.map((file) => `- ${file}`).join("\n");
+  const recentSubjects = Array.isArray(recentCommitSubjects)
+    ? recentCommitSubjects.map((item) => `- ${item}`).join("\n")
+    : "";
+  const hasRecentSubjects = Boolean(recentSubjects);
   return [
     "You are a senior engineer preparing a commit.",
     "Analyze the staged git changes and return strict JSON only with this shape:",
@@ -661,6 +665,9 @@ function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) 
     "- commitMessage MUST use conventional commits (type(scope): msg or type: msg).",
     "- commitDescription should explain intent and key impact in 2-4 short lines.",
     "- do not mention file counts, insertions/deletions, or diff stats.",
+    hasRecentSubjects
+      ? "- align wording and scope style with the recent commit subjects shown below."
+      : "- use concise wording and conventional commit style.",
     "- return only one JSON object, no markdown, no extra keys.",
     "- wrap the JSON object between these exact markers:",
     "OC_JSON_START",
@@ -669,6 +676,13 @@ function buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff }) 
     `Repository: ${repoName}`,
     `Branch: ${branch || "unknown"}`,
     "",
+    ...(hasRecentSubjects
+      ? [
+          "Recent commit subjects (style reference):",
+          recentSubjects,
+          ""
+        ]
+      : []),
     "Staged files:",
     filesText,
     "",
@@ -689,7 +703,8 @@ function normalizeCommitAssistConfig(rawConfig) {
     model: "",
     variant: "",
     timeoutMs: COMMIT_ASSIST_TIMEOUT_MS,
-    diffMaxChars: COMMIT_ASSIST_DIFF_MAX_CHARS
+    diffMaxChars: COMMIT_ASSIST_DIFF_MAX_CHARS,
+    historyCount: 12
   };
 
   const commitAssist =
@@ -705,7 +720,8 @@ function normalizeCommitAssistConfig(rawConfig) {
     model: modelInput,
     variant: variantInput,
     timeoutMs: clampInt(commitAssist.timeoutMs, 3000, 45000, defaults.timeoutMs),
-    diffMaxChars: clampInt(commitAssist.diffMaxChars, 3000, 30000, defaults.diffMaxChars)
+    diffMaxChars: clampInt(commitAssist.diffMaxChars, 3000, 30000, defaults.diffMaxChars),
+    historyCount: clampInt(commitAssist.historyCount, 0, 50, defaults.historyCount)
   };
 }
 
@@ -726,6 +742,14 @@ async function readProjectCommitAssistConfig(projectPath) {
   }
 
   return normalizeCommitAssistConfig(null);
+}
+
+function parseRecentCommitSubjects(stdout, limit) {
+  return String(stdout || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, limit);
 }
 
 async function runCommitAssistWithTimeout(projectPath, prompt, options) {
@@ -1167,11 +1191,18 @@ app.post("/api/projects/commit-assist", async (req, res) => {
     await ensureGitRepository(projectPath);
     const commitAssistConfig = await readProjectCommitAssistConfig(projectPath);
 
-    const [repoNameResult, branchResult, stagedFilesResult, stagedDiffResult] = await Promise.all([
+    const historyCount = Number(commitAssistConfig.historyCount) || 0;
+    const recentSubjectsPromise =
+      historyCount > 0
+        ? runCommand("git", ["log", `-${historyCount}`, "--pretty=%s"], { cwd: projectPath }).catch(() => ({ stdout: "" }))
+        : Promise.resolve({ stdout: "" });
+
+    const [repoNameResult, branchResult, stagedFilesResult, stagedDiffResult, recentSubjectsResult] = await Promise.all([
       runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: projectPath }),
       runCommand("git", ["branch", "--show-current"], { cwd: projectPath }).catch(() => ({ stdout: "" })),
       runCommand("git", ["diff", "--cached", "--name-only"], { cwd: projectPath }),
-      runCommand("git", ["diff", "--cached"], { cwd: projectPath })
+      runCommand("git", ["diff", "--cached"], { cwd: projectPath }),
+      recentSubjectsPromise
     ]);
 
     const stagedFiles = String(stagedFilesResult.stdout || "")
@@ -1193,7 +1224,8 @@ app.post("/api/projects/commit-assist", async (req, res) => {
 
     const repoName = path.basename(String(repoNameResult.stdout || "").trim()) || path.basename(projectPath);
     const branch = String(branchResult.stdout || "").trim() || "detached";
-    const prompt = buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff });
+    const recentCommitSubjects = parseRecentCommitSubjects(recentSubjectsResult.stdout, historyCount);
+    const prompt = buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff, recentCommitSubjects });
     const fallbackDraft = buildCommitAssistFallback({ stagedFiles, stagedDiff: stagedDiffRaw });
 
     const assistResult = await runCommitAssistWithTimeout(projectPath, prompt, commitAssistConfig);
