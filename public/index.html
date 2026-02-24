@@ -47,9 +47,18 @@
           <button type="submit" class="primary-btn w-full mt-2">Open Project</button>
         </form>
 
-        <div class="sidebar-section">
-          <h3 class="section-title">Recent Projects</h3>
-          <div id="project-list" class="project-list"></div>
+        <div class="sidebar-section sidebar-section-saved">
+          <div class="saved-projects-header">
+            <h3 class="section-title">Saved Projects</h3>
+            <button id="change-project-icon-btn" class="icon-btn compact-icon-btn" aria-label="Change active project icon" disabled>
+              <i data-lucide="image-plus"></i>
+            </button>
+          </div>
+          <div id="project-list" class="project-list project-icon-list"></div>
+          <button id="add-saved-project-btn" class="saved-project-add-btn" type="button" aria-label="Add saved project">
+            <i data-lucide="plus"></i>
+          </button>
+          <input id="project-icon-input" type="file" accept="image/*" hidden />
         </div>
       </aside>
 

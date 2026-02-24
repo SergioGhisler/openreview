@@ -23,6 +23,9 @@ const openProjectForm = document.getElementById("open-project-form");
 const projectPathInput = document.getElementById("project-path");
 const projectSuggestionsEl = document.getElementById("project-suggestions");
 const toast = document.getElementById("toast");
+const changeProjectIconBtn = document.getElementById("change-project-icon-btn");
+const projectIconInput = document.getElementById("project-icon-input");
+const addSavedProjectBtn = document.getElementById("add-saved-project-btn");
 
 const menuBtn = document.getElementById("menu-btn");
 const closeSidebarBtn = document.getElementById("close-sidebar-btn");
@@ -248,6 +251,41 @@ function setDiffMessage(msg) {
 
 function isMobileLayout() {
   return window.matchMedia("(max-width: 980px)").matches;
+}
+
+function lockBodyScroll() {
+  if (!isMobileLayout() || document.body.classList.contains("sidebar-scroll-locked")) return;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
+  document.body.dataset.scrollY = String(scrollY);
+  document.body.style.position = "fixed";
+  document.body.style.top = `-${scrollY}px`;
+  document.body.style.left = "0";
+  document.body.style.right = "0";
+  document.body.style.width = "100%";
+  document.body.classList.add("sidebar-scroll-locked");
+}
+
+function unlockBodyScroll() {
+  if (!document.body.classList.contains("sidebar-scroll-locked")) return;
+  const savedY = Number(document.body.dataset.scrollY || 0);
+  document.body.classList.remove("sidebar-scroll-locked");
+  delete document.body.dataset.scrollY;
+  document.body.style.position = "";
+  document.body.style.top = "";
+  document.body.style.left = "";
+  document.body.style.right = "";
+  document.body.style.width = "";
+  window.scrollTo(0, savedY);
+}
+
+function openSidebar() {
+  document.body.classList.add("show-sidebar");
+  lockBodyScroll();
+}
+
+function closeSidebar() {
+  document.body.classList.remove("show-sidebar");
+  unlockBodyScroll();
 }
 
 function getActivePullSource(target) {
@@ -825,7 +863,7 @@ function renderProjectSuggestions() {
   const listMarkup = matches
     .map((project, index) => {
       const selectedClass = index === suggestionState.selectedIndex ? "selected" : "";
-      const sourceLabel = project.source === "recent" ? "Recent" : "Git";
+      const sourceLabel = project.source === "recent" ? "Saved" : "Git";
       return `
         <button
           type="button"
@@ -870,7 +908,11 @@ async function chooseProjectSuggestion(index) {
 }
 
 function saveProjects() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.projects));
+  } catch {
+    showToast("Could not persist saved projects locally.", true);
+  }
 }
 
 function loadProjects() {
@@ -931,25 +973,49 @@ function getRecentProjectName(project) {
   return project.repoName || project.name;
 }
 
+function getProjectInitial(project) {
+  const title = getRecentProjectName(project).trim();
+  if (!title) return "?";
+  return title[0].toUpperCase();
+}
+
+function getProjectColorToken(projectPath) {
+  const palette = ["indigo", "sky", "emerald", "amber", "rose", "violet", "cyan"];
+  const value = String(projectPath || "");
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return palette[hash % palette.length];
+}
+
 function renderProjects() {
   if (!state.projects.length) {
-    projectListEl.innerHTML = "<p>No opened projects yet.</p>";
+    projectListEl.innerHTML = '<p class="saved-projects-empty">No saved projects.</p>';
     return;
   }
 
   projectListEl.innerHTML = state.projects
     .map((project) => {
       const isActive = project.path === state.activePath;
-      const dirtyCount = project.changedFiles.length;
-      const incomingCount = Number(project.remote?.behind || 0);
-      const incomingText = incomingCount > 0 ? ` • ↓ ${incomingCount}` : "";
+      const dirtyCount = Array.isArray(project.changedFiles) ? project.changedFiles.length : 0;
       const title = getRecentProjectName(project);
-      const sidebarPath = getRecentProjectPath(project);
+      const initial = getProjectInitial(project);
+      const iconMarkup = project.iconDataUrl
+        ? `<img class="project-icon-image" src="${escapeHtml(project.iconDataUrl)}" alt="${escapeHtml(title)} icon" loading="lazy" />`
+        : `<span class="project-icon-initial">${escapeHtml(initial)}</span>`;
       return `
-        <button class="project-item ${isActive ? "active" : ""}" data-path="${project.path}">
-          <strong>${title}</strong>
-          <small>${sidebarPath}</small>
-          <small>${project.isGit ? `${dirtyCount} changed file(s)${incomingText}` : "Not a git repository"}</small>
+        <button
+          class="project-item project-icon-item ${isActive ? "active" : ""}"
+          data-path="${project.path}"
+          title="${escapeHtml(title)}"
+          aria-label="Open saved project ${escapeHtml(title)}"
+        >
+          <span class="project-icon-shell color-${getProjectColorToken(project.path)}">
+            ${iconMarkup}
+          </span>
+          <span class="project-folder-name">${escapeHtml(title)}</span>
+          ${dirtyCount > 0 ? `<span class="project-change-badge">${dirtyCount}</span>` : ""}
         </button>
       `;
     })
@@ -992,10 +1058,12 @@ function renderProjectDetails() {
     outgoingSectionEl?.classList.add("hidden");
     renderOutgoingList();
     renderPrList();
+    if (changeProjectIconBtn) changeProjectIconBtn.disabled = true;
     return;
   }
 
   setActionButtonsState();
+  if (changeProjectIconBtn) changeProjectIconBtn.disabled = false;
   projectSwitcherBtn.disabled = !project.isGit;
   projectTitleEl.textContent = `${project.name}${project.isGit && project.branch ? ` (${project.branch})` : ""}`;
   projectMetaEl.textContent = project.path;
@@ -1149,7 +1217,11 @@ async function refreshActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not refresh project.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.iconDataUrl = p.iconDataUrl || payload.iconDataUrl || null;
+      return payload;
+    });
     saveProjects();
 
     if (state.selectedFile && !payload.changedFiles.some((f) => f.file === state.selectedFile)) {
@@ -1195,7 +1267,11 @@ async function stageFile(file) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not stage file.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     renderProjects();
     renderProjectDetails();
@@ -1233,7 +1309,11 @@ async function unstageFile(file) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not unstage file.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     renderProjects();
     renderProjectDetails();
@@ -1270,7 +1350,11 @@ async function stageAllActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not stage changes.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     renderProjects();
     renderProjectDetails();
@@ -1307,7 +1391,11 @@ async function commitActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not commit changes.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     state.selectedFile = null;
     setDiffMessage("Pick a file to inspect its diff.");
@@ -1353,7 +1441,11 @@ async function pushActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not push changes.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     renderProjects();
     renderProjectDetails();
@@ -1440,7 +1532,11 @@ async function pullActiveProject() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not pull changes.");
 
-    state.projects = state.projects.map((p) => (p.path === payload.path ? payload.snapshot : p));
+    state.projects = state.projects.map((p) => {
+      if (p.path !== payload.path) return p;
+      payload.snapshot.iconDataUrl = p.iconDataUrl || payload.snapshot.iconDataUrl || null;
+      return payload.snapshot;
+    });
     saveProjects();
     renderProjects();
     renderProjectDetails();
@@ -1459,7 +1555,7 @@ function selectProject(projectPath) {
   state.selectedFile = null;
   closeWorktreeMenu();
   setDiffMessage("Pick a file to inspect its diff.");
-  document.body.classList.remove("show-sidebar");
+  closeSidebar();
   document.body.classList.remove("viewing-diff");
   renderProjects();
   renderProjectDetails();
@@ -1486,10 +1582,13 @@ async function openProject(projectPath) {
     const recentPath = payload.repoRoot || payload.path;
     if (existing) {
       const existingRecentPath = getRecentProjectPath(existing) || recentPath;
+      const existingIcon = existing.iconDataUrl || null;
       Object.assign(existing, payload);
       existing.recentPath = existingRecentPath;
+      existing.iconDataUrl = existingIcon;
     } else {
       payload.recentPath = recentPath;
+      payload.iconDataUrl = null;
       state.projects.unshift(payload);
     }
 
@@ -1507,6 +1606,38 @@ openProjectForm.addEventListener("submit", async (event) => {
   closeProjectSuggestions();
   await openProject(projectPathInput.value);
 });
+
+function setActiveProjectIcon(file) {
+  const activeProject = getActiveProject();
+  if (!activeProject || !file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("Please pick an image file.", true);
+    return;
+  }
+
+  if (file.size > 1024 * 1024) {
+    showToast("Image is too large. Keep it under 1MB.", true);
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = typeof reader.result === "string" ? reader.result : "";
+    if (!dataUrl) {
+      showToast("Could not read image.", true);
+      return;
+    }
+
+    activeProject.iconDataUrl = dataUrl;
+    saveProjects();
+    renderProjects();
+    showToast("Project icon updated.");
+  };
+  reader.onerror = () => {
+    showToast("Could not read image.", true);
+  };
+  reader.readAsDataURL(file);
+}
 
 projectPathInput.addEventListener("focus", () => {
   showProjectSuggestions();
@@ -1566,6 +1697,25 @@ projectSuggestionsEl.addEventListener("click", async (event) => {
 
   const index = Number(button.dataset.index);
   await chooseProjectSuggestion(index);
+});
+
+changeProjectIconBtn?.addEventListener("click", () => {
+  if (!getActiveProject()) return;
+  projectIconInput?.click();
+});
+
+projectIconInput?.addEventListener("change", (event) => {
+  const input = event.target;
+  const file = input?.files?.[0];
+  if (file) {
+    setActiveProjectIcon(file);
+  }
+  input.value = "";
+});
+
+addSavedProjectBtn?.addEventListener("click", () => {
+  projectPathInput.focus();
+  showProjectSuggestions();
 });
 
 refreshBtn.addEventListener("click", async () => {
@@ -1763,15 +1913,15 @@ function init() {
 
 // Mobile and layout interactivity bindings
 menuBtn?.addEventListener("click", () => {
-  document.body.classList.add("show-sidebar");
+  openSidebar();
 });
 
 closeSidebarBtn?.addEventListener("click", () => {
-  document.body.classList.remove("show-sidebar");
+  closeSidebar();
 });
 
 sidebarOverlay?.addEventListener("click", () => {
-  document.body.classList.remove("show-sidebar");
+  closeSidebar();
 });
 
 backToFilesBtn?.addEventListener("click", () => {
