@@ -1692,8 +1692,26 @@ input:focus {
   color: var(--text-muted);
 }
 
+.commit-draft-status.loading::after {
+  content: "...";
+  display: inline-block;
+  width: 1.1rem;
+  margin-left: 0.1rem;
+  overflow: hidden;
+  animation: commit-draft-dots 1.1s steps(4, end) infinite;
+}
+
 .commit-draft-status.error {
   color: var(--danger);
+}
+
+@keyframes commit-draft-dots {
+  0% {
+    width: 0;
+  }
+  100% {
+    width: 1.1rem;
+  }
 }
 
 .commit-draft-card {

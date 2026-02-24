@@ -862,8 +862,8 @@ function renderCommitDraftModal() {
 
   if (commitDraftStatusEl) {
     if (loading) {
-      commitDraftStatusEl.textContent = "Generating commit draft with OpenCode...";
-      commitDraftStatusEl.className = "commit-draft-status";
+      commitDraftStatusEl.textContent = "Generating commit draft";
+      commitDraftStatusEl.className = "commit-draft-status loading";
     } else if (hasError) {
       commitDraftStatusEl.textContent = commitDraftState.error;
       commitDraftStatusEl.className = "commit-draft-status error";

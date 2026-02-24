@@ -1267,7 +1267,22 @@ app.post("/api/projects/commit-assist", async (req, res) => {
     const prompt = buildCommitAssistPrompt({ repoName, branch, stagedFiles, stagedDiff, recentCommitSubjects });
     const fallbackDraft = buildCommitAssistFallback({ stagedFiles, stagedDiff: stagedDiffRaw });
 
-    const assistResult = await runCommitAssistWithTimeout(projectPath, prompt, commitAssistConfig);
+    let assistResult;
+    try {
+      assistResult = await runCommitAssistWithTimeout(projectPath, prompt, commitAssistConfig);
+    } catch (error) {
+      const message = `${error.message || ""}\n${error.stderr || ""}`.toLowerCase();
+      if (error.code === "ENOENT" || message.includes("opencode: command not found")) {
+        res.json({
+          path: projectPath,
+          message: fallbackDraft.commitMessage,
+          description: fallbackDraft.commitDescription,
+          files: stagedFiles
+        });
+        return;
+      }
+      throw error;
+    }
 
     if (assistResult.timedOut) {
       res.json({
@@ -1303,11 +1318,6 @@ app.post("/api/projects/commit-assist", async (req, res) => {
       files: stagedFiles
     });
   } catch (error) {
-    const message = `${error.message || ""}\n${error.stderr || ""}`.toLowerCase();
-    if (error.code === "ENOENT" || message.includes("opencode: command not found")) {
-      res.status(400).json({ error: "OpenCode CLI is required (install and ensure `opencode` is in PATH)." });
-      return;
-    }
     res.status(error.status || 500).json({ error: error.message || "Could not generate commit draft." });
   }
 });
