@@ -1749,10 +1749,12 @@ async function refreshActiveProject() {
 
 async function refreshAllActiveProjectData() {
   await refreshActiveProject();
-  await loadRunProfilesForActiveProject();
-  await loadRunStatusesForActiveProject();
-  await loadOutgoingCommitsForActiveProject();
-  await loadOpenPrsForActiveProject();
+  await Promise.all([
+    loadRunProfilesForActiveProject(),
+    loadRunStatusesForActiveProject(),
+    loadOutgoingCommitsForActiveProject(),
+    loadOpenPrsForActiveProject()
+  ]);
 }
 
 async function stageFile(file) {
