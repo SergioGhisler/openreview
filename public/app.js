@@ -7,6 +7,7 @@ const state = {
 };
 
 const projectListEl = document.getElementById("project-list");
+const mainContentEl = document.querySelector(".main-content");
 const filesListEl = document.getElementById("files-list");
 const diffViewerEl = document.getElementById("diff-viewer");
 const projectTitleEl = document.getElementById("project-title");
@@ -31,6 +32,7 @@ const filesCountEl = document.getElementById("files-count");
 const diffFileNameEl = document.getElementById("diff-file-name");
 const addAllBtn = document.getElementById("add-all-btn");
 const incomingPillEl = document.getElementById("incoming-pill");
+const pullRefreshIndicatorEl = document.getElementById("pull-refresh-indicator");
 const outgoingSectionEl = document.getElementById("outgoing-section");
 const outgoingToggleBtn = document.getElementById("outgoing-toggle-btn");
 const outgoingCountEl = document.getElementById("outgoing-count");
@@ -89,6 +91,16 @@ const swipeConfig = {
   trigger: 84,
   maxOffset: 120,
   deadZone: 10
+};
+
+const pullRefreshState = {
+  tracking: false,
+  refreshing: false,
+  startY: 0,
+  distance: 0,
+  sourceEl: null,
+  trigger: 72,
+  maxDistance: 108
 };
 
 function isFileStaged(file) {
@@ -232,6 +244,53 @@ function escapeHtml(value) {
 
 function setDiffMessage(msg) {
   diffViewerEl.innerHTML = `<span class="diff-line diff-context">${escapeHtml(msg)}</span>`;
+}
+
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
+function getActivePullSource(target) {
+  if (document.body.classList.contains("show-sidebar")) return null;
+
+  const filesPanelContent = document.querySelector("#files-panel .panel-content");
+  const diffPanelContent = document.querySelector("#diff-panel .diff-content");
+  const inDiffView = document.body.classList.contains("viewing-diff");
+
+  if (inDiffView) {
+    if (!diffPanelContent || !target.closest("#diff-panel")) return null;
+    return diffPanelContent;
+  }
+
+  if (!filesPanelContent || !target.closest("#files-panel")) return null;
+  return filesPanelContent;
+}
+
+function renderPullRefreshIndicator() {
+  if (!pullRefreshIndicatorEl) return;
+  const distance = pullRefreshState.distance;
+  const visible = pullRefreshState.tracking || pullRefreshState.refreshing;
+
+  pullRefreshIndicatorEl.classList.toggle("visible", visible);
+  pullRefreshIndicatorEl.classList.toggle("tracking", pullRefreshState.tracking);
+  pullRefreshIndicatorEl.classList.toggle("ready", distance >= pullRefreshState.trigger && !pullRefreshState.refreshing);
+  pullRefreshIndicatorEl.classList.toggle("refreshing", pullRefreshState.refreshing);
+  mainContentEl?.classList.toggle("pull-refresh-tracking", pullRefreshState.tracking);
+  mainContentEl?.classList.toggle("pull-refresh-active", visible);
+}
+
+function setPullRefreshDistance(distance) {
+  if (!mainContentEl) return;
+  mainContentEl.style.setProperty("--pull-refresh-distance", `${distance}px`);
+}
+
+function resetPullRefreshState() {
+  pullRefreshState.tracking = false;
+  pullRefreshState.startY = 0;
+  pullRefreshState.distance = 0;
+  pullRefreshState.sourceEl = null;
+  setPullRefreshDistance(0);
+  renderPullRefreshIndicator();
 }
 
 function formatRelativeDate(isoValue) {
@@ -1062,6 +1121,12 @@ async function refreshActiveProject() {
   }
 }
 
+async function refreshAllActiveProjectData() {
+  await refreshActiveProject();
+  await loadOutgoingCommitsForActiveProject();
+  await loadOpenPrsForActiveProject();
+}
+
 async function stageFile(file) {
   const project = getActiveProject();
   if (
@@ -1457,9 +1522,7 @@ projectSuggestionsEl.addEventListener("click", async (event) => {
 });
 
 refreshBtn.addEventListener("click", async () => {
-  await refreshActiveProject();
-  await loadOutgoingCommitsForActiveProject();
-  await loadOpenPrsForActiveProject();
+  await refreshAllActiveProjectData();
 });
 
 commitBtn.addEventListener("click", async () => {
@@ -1554,6 +1617,85 @@ document.addEventListener("click", (event) => {
   closeWorktreeMenu();
 });
 
+function bindPullToRefresh() {
+  document.addEventListener(
+    "touchstart",
+    (event) => {
+      if (!isMobileLayout() || pullRefreshState.refreshing) return;
+      const sourceEl = getActivePullSource(event.target);
+      if (!sourceEl || sourceEl.scrollTop > 0) return;
+
+      pullRefreshState.tracking = true;
+      pullRefreshState.startY = event.touches[0]?.clientY || 0;
+      pullRefreshState.distance = 0;
+      pullRefreshState.sourceEl = sourceEl;
+      renderPullRefreshIndicator();
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchmove",
+    (event) => {
+      if (!pullRefreshState.tracking || pullRefreshState.refreshing) return;
+      if (!pullRefreshState.sourceEl) return;
+      if (pullRefreshState.sourceEl.scrollTop > 0) {
+        resetPullRefreshState();
+        return;
+      }
+
+      const currentY = event.touches[0]?.clientY || 0;
+      const delta = currentY - pullRefreshState.startY;
+
+      if (delta <= 0) {
+        pullRefreshState.distance = 0;
+        setPullRefreshDistance(0);
+        renderPullRefreshIndicator();
+        return;
+      }
+
+      pullRefreshState.distance = Math.min(pullRefreshState.maxDistance, delta * 0.52);
+      setPullRefreshDistance(pullRefreshState.distance);
+      renderPullRefreshIndicator();
+      event.preventDefault();
+    },
+    { passive: false }
+  );
+
+  document.addEventListener(
+    "touchend",
+    async () => {
+      if (!pullRefreshState.tracking) return;
+      const shouldRefresh = pullRefreshState.distance >= pullRefreshState.trigger;
+      resetPullRefreshState();
+
+      if (!shouldRefresh || pullRefreshState.refreshing) return;
+
+      pullRefreshState.refreshing = true;
+      setPullRefreshDistance(Math.max(42, pullRefreshState.trigger * 0.72));
+      renderPullRefreshIndicator();
+
+      try {
+        await refreshAllActiveProjectData();
+      } finally {
+        pullRefreshState.refreshing = false;
+        setPullRefreshDistance(0);
+        renderPullRefreshIndicator();
+      }
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    "touchcancel",
+    () => {
+      if (!pullRefreshState.tracking) return;
+      resetPullRefreshState();
+    },
+    { passive: true }
+  );
+}
+
 function init() {
   loadProjects();
   renderProjects();
@@ -1568,6 +1710,8 @@ function init() {
   } else {
     renderProjectDetails();
   }
+
+  bindPullToRefresh();
 }
 
 // Mobile and layout interactivity bindings
