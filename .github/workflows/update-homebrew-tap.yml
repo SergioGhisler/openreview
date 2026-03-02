@@ -1,0 +1,41 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: SergioGhisler/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Compute tarball URL and SHA
+        id: release
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          URL="https://github.com/SergioGhisler/openreview/archive/refs/tags/${TAG}.tar.gz"
+          SHA=$(curl -Ls "$URL" | sha256sum | awk '{print $1}')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula
+        run: |
+          FILE="tap/Formula/openreview.rb"
+          sed -i "s|^  url \".*\"|  url \"${{ steps.release.outputs.url }}\"|" "$FILE"
+          sed -i "s|^  sha256 \".*\"|  sha256 \"${{ steps.release.outputs.sha }}\"|" "$FILE"
+
+      - name: Commit and push
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/openreview.rb
+          git commit -m "openreview ${{ steps.release.outputs.tag }}" || exit 0
+          git push
