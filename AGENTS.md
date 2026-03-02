@@ -42,6 +42,14 @@ Current `package.json` scripts:
 - `npm start` -> starts server (`node server.js`).
 - `npm run dev` -> same as start.
 
+GitHub Actions:
+
+- `.github/workflows/ci.yml` runs on push/PR to `main`.
+- CI installs dependencies with `npm ci`.
+- CI validates syntax with:
+  - `node --check server.js`
+  - `node --check public/app.js`
+
 Important current state:
 
 - No dedicated `build` script.
