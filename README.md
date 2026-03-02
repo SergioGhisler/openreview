@@ -24,6 +24,13 @@ Then open `http://localhost:5050`.
 - This app is intended for local use on your machine.
 - Folder opening is path-based (paste absolute path).
 
+## Project Governance
+
+- Contributions: see `CONTRIBUTING.md`
+- Conduct expectations: see `CODE_OF_CONDUCT.md`
+- Security disclosures: see `SECURITY.md`
+- License: MIT (`LICENSE`)
+
 ## Commit Assist Model Configuration
 
 For commit drafting, each target repository can define OpenCode settings in either:
